@@ -17,7 +17,16 @@ try {
 }
 
 $templates = $pdo->query("SELECT * FROM form_generator_template ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
-$events = $pdo->query("SELECT * FROM form_generator_config ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
+
+// Fetch events and count respondents for each
+$events = $pdo->query("
+    SELECT c.*, 
+    (SELECT COUNT(*) FROM respondent r WHERE r.id_event = c.event_id) as response_count 
+    FROM form_generator_config c 
+    ORDER BY created_at DESC
+")->fetchAll(PDO::FETCH_ASSOC);
+
+$totalResponses = $pdo->query("SELECT COUNT(*) FROM respondent")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -44,6 +53,7 @@ $events = $pdo->query("SELECT * FROM form_generator_config ORDER BY created_at D
         .section-title { font-weight: 700; margin-bottom: 24px; display: flex; align-items: center; gap: 10px; }
         .badge-event { background: #e0e7ff; color: #4338ca; }
         .badge-template { background: #fef9c3; color: #854d0e; }
+        .badge-responses { background: #dcfce7; color: #166534; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -75,20 +85,79 @@ $events = $pdo->query("SELECT * FROM form_generator_config ORDER BY created_at D
                 <h2 class="mb-0 fw-bold"><?php echo count($events); ?></h2>
             </div>
         </div>
+        <div class="col-md-4">
+            <div class="card stat-card p-4">
+                <h6 class="text-white-50 text-uppercase fw-bold mb-1" style="font-size: 0.75rem;">Total Responses</h6>
+                <h2 class="mb-0 fw-bold"><?php echo $totalResponses; ?></h2>
+            </div>
+        </div>
     </div>
 
     <div class="row">
-        <div class="col-lg-6">
+        <div class="col-lg-12 mb-5">
+            <h4 class="section-title">
+                <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                Manage Events & Feedback
+            </h4>
+            <div class="row g-4">
+                <?php if (empty($events)): ?>
+                    <div class="col-12"><p class="text-muted">No events found. Start by creating an event.</p></div>
+                <?php endif; ?>
+                <?php foreach ($events as $e): ?>
+                    <div class="col-md-6 col-xl-4">
+                        <div class="card h-100 p-4">
+                            <div class="d-flex justify-content-between align-items-start mb-3">
+                                <div class="flex-grow-1">
+                                    <div class="d-flex align-items-center gap-2 mb-1">
+                                        <h5 class="mb-0 fw-bold"><?php echo htmlspecialchars($e['event_name']); ?></h5>
+                                    </div>
+                                    <span class="badge badge-event rounded-pill small" style="font-size: 0.65rem;"><?php echo htmlspecialchars($e['event_id']); ?></span>
+                                </div>
+                                <span class="badge badge-responses rounded-pill px-3 py-2">
+                                    <?php echo $e['response_count']; ?> Responses
+                                </span>
+                            </div>
+                            <p class="text-muted small mb-4 flex-grow-1">
+                                <?php echo htmlspecialchars($e['description'] ?? 'No description'); ?>
+                            </p>
+                            <div class="d-grid gap-2">
+                                <div class="d-flex gap-2">
+                                    <a href="index.php?tab=events&evt=<?php echo urlencode($e['event_id']); ?>" class="btn btn-outline-secondary btn-sm rounded-pill flex-fill">Edit Form</a>
+                                    <?php 
+                                    $formPath = "generated_forms/" . $e['event_id'] . "/index.php";
+                                    if (file_exists($formPath)): 
+                                    ?>
+                                        <a href="<?php echo $formPath; ?>" target="_blank" class="btn btn-outline-primary btn-sm rounded-pill flex-fill">View Live</a>
+                                    <?php else: ?>
+                                        <form method="POST" action="index.php" class="flex-fill">
+                                            <input type="hidden" name="action" value="generate">
+                                            <input type="hidden" name="eid" value="<?php echo htmlspecialchars($e['event_id']); ?>">
+                                            <button type="submit" class="btn btn-warning btn-sm rounded-pill w-100">Generate</button>
+                                        </form>
+                                    <?php endif; ?>
+                                </div>
+                                <a href="feedback.php?evt=<?php echo urlencode($e['event_id']); ?>" class="btn btn-primary rounded-pill">
+                                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="me-1"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                                    View Feedback & Analytics
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <div class="col-lg-12">
             <h4 class="section-title">
                 <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                Recent Templates
+                Template Library
             </h4>
             <div class="row g-3">
                 <?php if (empty($templates)): ?>
                     <div class="col-12"><p class="text-muted">No templates found.</p></div>
                 <?php endif; ?>
-                <?php foreach (array_slice($templates, 0, 4) as $t): ?>
-                    <div class="col-12">
+                <?php foreach ($templates as $t): ?>
+                    <div class="col-md-4 col-xl-3">
                         <div class="card p-3">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
@@ -100,60 +169,11 @@ $events = $pdo->query("SELECT * FROM form_generator_config ORDER BY created_at D
                         </div>
                     </div>
                 <?php endforeach; ?>
-                <?php if (count($templates) > 4): ?>
-                    <div class="col-12 text-center mt-3">
-                        <a href="index.php?tab=templates" class="text-decoration-none fw-bold" style="font-size: 0.85rem;">View All Templates →</a>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-
-        <div class="col-lg-6 mt-5 mt-lg-0">
-            <h4 class="section-title">
-                <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                Recent Events
-            </h4>
-            <div class="row g-3">
-                <?php if (empty($events)): ?>
-                    <div class="col-12"><p class="text-muted">No events found.</p></div>
-                <?php endif; ?>
-                <?php foreach (array_slice($events, 0, 4) as $e): ?>
-                    <div class="col-12">
-                        <div class="card p-3">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="flex-grow-1">
-                                    <div class="d-flex align-items-center gap-2 mb-1">
-                                        <h6 class="mb-0 fw-bold"><?php echo htmlspecialchars($e['event_name']); ?></h6>
-                                        <span class="badge badge-event rounded-pill" style="font-size: 0.65rem;"><?php echo htmlspecialchars($e['event_id']); ?></span>
-                                    </div>
-                                    <p class="text-muted small mb-0 text-truncate" style="max-width: 300px;">
-                                        <?php echo htmlspecialchars($e['description'] ?? 'No description'); ?>
-                                    </p>
-                                </div>
-                                <div class="d-flex gap-1">
-                                    <a href="index.php?tab=events&evt=<?php echo urlencode($e['event_id']); ?>" class="btn btn-sm btn-light rounded-pill px-3">Manage</a>
-                                    <?php 
-                                    $formPath = "generated_forms/" . $e['event_id'] . "/index.php";
-                                    if (file_exists($formPath)): 
-                                    ?>
-                                        <a href="<?php echo $formPath; ?>" target="_blank" class="btn btn-sm btn-primary rounded-pill px-3">View Form</a>
-                                    <?php else: ?>
-                                        <form method="POST" action="index.php" style="display:inline;">
-                                            <input type="hidden" name="action" value="generate">
-                                            <input type="hidden" name="eid" value="<?php echo htmlspecialchars($e['event_id']); ?>">
-                                            <button type="submit" class="btn btn-sm btn-warning rounded-pill px-3">Generate</button>
-                                        </form>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-                <?php if (count($events) > 4): ?>
-                    <div class="col-12 text-center mt-3">
-                        <a href="index.php?tab=events" class="text-decoration-none fw-bold" style="font-size: 0.85rem;">View All Events →</a>
-                    </div>
-                <?php endif; ?>
+                <div class="col-md-4 col-xl-3">
+                    <a href="index.php?tab=templates" class="card p-3 bg-light border-dashed text-center text-decoration-none h-100 d-flex align-items-center justify-content-center">
+                        <span class="text-primary fw-bold">+ Create New Template</span>
+                    </a>
+                </div>
             </div>
         </div>
     </div>
