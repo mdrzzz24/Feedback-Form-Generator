@@ -1,0 +1,25 @@
+[04-May-2026 06:18:41 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u2897042_feedback.form_config' doesn't exist in /home/u2897042/public_html/form-generator/index.php:127
+Stack trace:
+#0 /home/u2897042/public_html/form-generator/index.php(127): PDO->query('SELECT * FROM f...')
+#1 {main}
+  thrown in /home/u2897042/public_html/form-generator/index.php on line 127
+[04-May-2026 06:18:41 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u2897042_feedback.form_config' doesn't exist in /home/u2897042/public_html/form-generator/index.php:127
+Stack trace:
+#0 /home/u2897042/public_html/form-generator/index.php(127): PDO->query('SELECT * FROM f...')
+#1 {main}
+  thrown in /home/u2897042/public_html/form-generator/index.php on line 127
+[04-May-2026 06:22:05 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u2897042_feedback.form_config' doesn't exist in /home/u2897042/public_html/form-generator/index.php:127
+Stack trace:
+#0 /home/u2897042/public_html/form-generator/index.php(127): PDO->query('SELECT * FROM f...')
+#1 {main}
+  thrown in /home/u2897042/public_html/form-generator/index.php on line 127
+[04-May-2026 06:23:15 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u2897042_feedback.form_config' doesn't exist in /home/u2897042/public_html/form-generator/index.php:127
+Stack trace:
+#0 /home/u2897042/public_html/form-generator/index.php(127): PDO->query('SELECT * FROM f...')
+#1 {main}
+  thrown in /home/u2897042/public_html/form-generator/index.php on line 127
+[04-May-2026 06:26:13 UTC] PHP Warning:  Invalid argument supplied for foreach() in /home/u2897042/public_html/form-generator/index.php on line 615
+[04-May-2026 06:28:52 UTC] PHP Warning:  Invalid argument supplied for foreach() in /home/u2897042/public_html/form-generator/index.php on line 315
+[04-May-2026 07:03:53 UTC] PHP Parse error:  syntax error, unexpected ';' in /home/u2897042/public_html/form-generator/index.php on line 114
+[04-May-2026 08:08:26 UTC] PHP Notice:  Undefined variable: eS in /home/u2897042/public_html/form-generator/preview.php on line 143
+[04-May-2026 08:08:26 UTC] PHP Warning:  Invalid argument supplied for foreach() in /home/u2897042/public_html/form-generator/preview.php on line 143

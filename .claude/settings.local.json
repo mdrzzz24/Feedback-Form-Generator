@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(New-Item -ItemType Directory -Force \"C:\\\\xampp\\\\htdocs\\\\form-generator\\\\generated_forms\")",
+      "Bash(Out-Null)",
+      "PowerShell(New-Item *)"
+    ]
+  }
+}
