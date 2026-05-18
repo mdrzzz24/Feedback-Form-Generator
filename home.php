@@ -110,6 +110,11 @@ $totalResponses = $pdo->query("SELECT COUNT(*) FROM respondent")->fetchColumn();
                                 <div class="flex-grow-1">
                                     <div class="d-flex align-items-center gap-2 mb-1">
                                         <h5 class="mb-0 fw-bold"><?php echo htmlspecialchars($e['event_name']); ?></h5>
+                                        <?php if ($e['is_active']): ?>
+                                            <span class="badge bg-success rounded-pill" style="font-size: 0.6rem;">Active</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-danger rounded-pill" style="font-size: 0.6rem;">Inactive</span>
+                                        <?php endif; ?>
                                     </div>
                                     <span class="badge badge-event rounded-pill small" style="font-size: 0.65rem;"><?php echo htmlspecialchars($e['event_id']); ?></span>
                                 </div>
@@ -125,9 +130,13 @@ $totalResponses = $pdo->query("SELECT COUNT(*) FROM respondent")->fetchColumn();
                                     <a href="index.php?tab=events&evt=<?php echo urlencode($e['event_id']); ?>" class="btn btn-outline-secondary btn-sm rounded-pill flex-fill">Edit Form</a>
                                     <?php 
                                     $formPath = "generated_forms/" . $e['event_id'] . "/index.php";
+                                    $fullUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['PHP_SELF']) . "/generated_forms/" . $e['event_id'] . "/";
                                     if (file_exists($formPath)): 
                                     ?>
                                         <a href="<?php echo $formPath; ?>" target="_blank" class="btn btn-outline-primary btn-sm rounded-pill flex-fill">View Live</a>
+                                        <button type="button" class="btn btn-outline-success btn-sm rounded-pill" onclick="copyToClipboard('<?php echo $fullUrl; ?>')" title="Copy Share Link">
+                                            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+                                        </button>
                                     <?php else: ?>
                                         <form method="POST" action="index.php" class="flex-fill">
                                             <input type="hidden" name="action" value="generate">
@@ -183,5 +192,14 @@ $totalResponses = $pdo->query("SELECT COUNT(*) FROM respondent")->fetchColumn();
     &copy; <?php echo date('Y'); ?> Feedback Form Generator. All rights reserved.
 </footer>
 
+<script>
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Share link copied to clipboard!');
+    }).catch(err => {
+        console.error('Failed to copy: ', err);
+    });
+}
+</script>
 </body>
 </html>

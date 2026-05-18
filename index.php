@@ -147,6 +147,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                 $msgType = 'danger';
                 break;
 
+            case 'toggle_event_status':
+                $stmt = $pdo->prepare("UPDATE form_generator_config SET is_active = NOT is_active WHERE event_id = ?");
+                $stmt->execute([$_POST['id']]);
+                $msg = "Event status updated!";
+                $tab = 'events';
+                break;
+
             case 'create_event':
                 $eid = $_POST['eid'];
                 $ename = $_POST['ename'];
@@ -154,6 +161,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                 $tplId = empty($_POST['etpl']) ? null : $_POST['etpl'];
                 $theme = $_POST['theme'] ?? 'default';
                 $layout = $_POST['layout'] ?? 'standard';
+                $smsg = !empty($_POST['smsg']) ? $_POST['smsg'] : 'Thank you! Your feedback has been successfully submitted.';
+                $stype = $_POST['stype'] ?? 'standard';
+                $is_active = isset($_POST['is_active']) ? 1 : 0;
+                $allow_multiple = isset($_POST['allow_multiple']) ? 1 : 0;
 
                 // Check if event exists
                 $stmt = $pdo->prepare("SELECT * FROM form_generator_config WHERE event_id = ?");
@@ -172,12 +183,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
 
                 if ($existing) {
                     // Update existing event
-                    $stmt = $pdo->prepare("UPDATE form_generator_config SET event_name = ?, header_image = ?, description = ?, template_id = ?, theme = ?, layout = ? WHERE event_id = ?");
-                    $stmt->execute([$ename, $img, $edesc, $tplId, $theme, $layout, $eid]);
+                    $stmt = $pdo->prepare("UPDATE form_generator_config SET event_name = ?, header_image = ?, description = ?, template_id = ?, theme = ?, layout = ?, success_msg = ?, success_type = ?, is_active = ?, allow_multiple = ? WHERE event_id = ?");
+                    $stmt->execute([$ename, $img, $edesc, $tplId, $theme, $layout, $smsg, $stype, $is_active, $allow_multiple, $eid]);
                 } else {
                     // Create new event
-                    $stmt = $pdo->prepare("INSERT INTO form_generator_config (event_name, event_id, header_image, description, template_id, theme, layout) VALUES (?, ?, ?, ?, ?, ?, ?)");
-                    $stmt->execute([$ename, $eid, $img, $edesc, $tplId, $theme, $layout]);
+                    $stmt = $pdo->prepare("INSERT INTO form_generator_config (event_name, event_id, header_image, description, template_id, theme, layout, success_msg, success_type, is_active, allow_multiple) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$ename, $eid, $img, $edesc, $tplId, $theme, $layout, $smsg, $stype, $is_active, $allow_multiple]);
 
                     // Copy template questions only for new events
                     if ($tplId) {
@@ -202,7 +213,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                         }
                     }
                 }
-                $msg = "Event settings successfully saved!";
+                
+                // AUTO-SYNC: Update dynamic proxy files
+                $dir = __DIR__ . "/generated_forms/$eid";
+                if (!is_dir($dir)) mkdir($dir, 0777, true);
+                
+                // Fetch fresh config for buildForm
+                $stmt = $pdo->prepare("SELECT * FROM form_generator_config WHERE event_id = ?");
+                $stmt->execute([$eid]);
+                $freshEvent = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($freshEvent) {
+                    file_put_contents("$dir/index.php", buildForm($freshEvent, [], [], [], []));
+                    file_put_contents("$dir/submit.php", buildSubmit($eid, [], []));
+                }
+
+                $msg = "Event settings saved and synced!";
                 $tab = 'events';
                 break;
 
@@ -404,225 +430,201 @@ if ($pdo) {
 }
 
 function buildForm($ev, $tQ, $eQ, $tS = [], $eS = []) {
-    $name = htmlspecialchars($ev['event_name'], ENT_QUOTES, 'UTF-8');
-    $eid = htmlspecialchars($ev['event_id'], ENT_QUOTES, 'UTF-8');
-    $img = htmlspecialchars($ev['header_image'] ?? '', ENT_QUOTES, 'UTF-8');
-    $desc = htmlspecialchars($ev['description'] ?? '', ENT_QUOTES, 'UTF-8');
-    $layout = $ev['layout'] ?? 'standard';
+    $eid = $ev['event_id'];
 
-    $tQS = [0 => []];
-    foreach ($tS as $s) $tQS[$s['id']] = [];
-    foreach ($tQ as $q) $tQS[$q['section_id'] ?? 0][] = $q;
+    // The generated file will now be dynamic
+    $phpCode = "<?php\n" .
+        "// Instant Sync Form - Dynamically fetches latest settings from DB\n" .
+        "error_reporting(E_ALL); ini_set('display_errors', 1);\n" .
+        "\$host = 'localhost'; \$dbname = 'feedback_db'; \$username = 'root'; \$password = '';\n" .
+        "try { \$pdo = new PDO(\"mysql:host=\$host;dbname=\$dbname\", \$username, \$password); \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); } catch (PDOException \$e) { die('DB Error'); }\n\n" .
 
-    $eQS = [0 => []];
-    foreach ($eS as $s) $eQS[$s['id']] = [];
-    foreach ($eQ as $q) $eQS[$q['section_id'] ?? 0][] = $q;
+        "// Fetch Event Configuration\n" .
+        "\$stmt = \$pdo->prepare(\"SELECT * FROM form_generator_config WHERE event_id = ?\");\n" .
+        "\$stmt->execute(['$eid']);\n" .
+        "\$ev = \$stmt->fetch(PDO::FETCH_ASSOC);\n" .
+        "if (!\$ev) die('Event not found.');\n" .
+        "\$eid = \$ev['event_id'];\n\n" .
 
-    $qNames = [];
-    foreach ($tQ as $q) {
-        $n = 'p_' . $q['id'];
-        if (stripos($q['question_text'], 'nama') !== false || stripos($q['question_text'], 'name') !== false) $n = 'name';
-        elseif (stripos($q['question_text'], 'email') !== false) $n = 'email';
-        elseif (stripos($q['question_text'], 'perusahaan') !== false || stripos($q['question_text'], 'company') !== false) $n = 'companyName';
-        elseif (stripos($q['question_text'], 'jabatan') !== false || stripos($q['question_text'], 'title') !== false) $n = 'jobTitle';
-        elseif (stripos($q['question_text'], 'telepon') !== false || stripos($q['question_text'], 'phone') !== false || stripos($q['question_text'], 'hp') !== false) $n = 'mobileNumber';
-        $qNames['p_' . $q['id']] = $n;
-    }
-    foreach ($eQ as $q) {
-        $n = 'q_' . $q['id'];
-        if (stripos($q['question_text'], 'nama') !== false || stripos($q['question_text'], 'name') !== false) $n = 'name';
-        elseif (stripos($q['question_text'], 'email') !== false) $n = 'email';
-        elseif (stripos($q['question_text'], 'perusahaan') !== false || stripos($q['question_text'], 'company') !== false) $n = 'companyName';
-        elseif (stripos($q['question_text'], 'jabatan') !== false || stripos($q['question_text'], 'title') !== false) $n = 'jobTitle';
-        elseif (stripos($q['question_text'], 'telepon') !== false || stripos($q['question_text'], 'phone') !== false || stripos($q['question_text'], 'hp') !== false) $n = 'mobileNumber';
-        $qNames['q_' . $q['id']] = $n;
-    }
+        "// Check if form is active\n" .
+        "if (!\$ev['is_active']) {\n" .
+        "    echo \"<!DOCTYPE html><html><head><title>Form Closed</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/css/bootstrap.min.css' rel='stylesheet'><style>body{background:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;}</style></head><body><div class='text-center'><div class='card p-5 border-0 shadow-sm' style='border-radius:20px;max-width:500px;'><h1 class='display-6 fw-bold mb-3'>Form Closed</h1><p class='text-muted lead'>This feedback form is currently inactive or has been closed by the organizer.</p><a href='../../home.php' class='btn btn-primary rounded-pill px-4'>Back to Home</a></div></div></body></html>\";\n" .
+        "    exit;\n" .
+        "}\n\n" .
 
-    $renderQ = function($q, $prefix) use ($qNames) {
-        $n = $qNames[$prefix . $q['id']] ?? ($prefix . $q['id']);
-        $txt = htmlspecialchars($q['question_text'], ENT_QUOTES, 'UTF-8');
+        "// Fetch Sections and Questions\n" .
+        "\$evtSections = \$pdo->prepare(\"SELECT * FROM form_generator_event_sections WHERE event_id = ? ORDER BY sort_order ASC, id ASC\");\n" .
+        "\$evtSections->execute(['$eid']);\n" .
+        "\$eS = \$evtSections->fetchAll(PDO::FETCH_ASSOC);\n\n" .
 
-        $t = $q['question_type'];
-        $r = $q['is_required'] ? 'required' : '';
-        $opts = !empty($q['options']) ? json_decode($q['options'], true) ?: [] : [];
+        "\$evtQs = \$pdo->prepare(\"SELECT * FROM form_generator_questions WHERE id_event = ? ORDER BY sort_order ASC, id ASC\");\n" .
+        "\$evtQs->execute(['$eid']);\n" .
+        "\$eQ = \$evtQs->fetchAll(PDO::FETCH_ASSOC);\n\n" .
 
-        $parentName = '';
-        if (isset($q['parent_question_id']) && $q['parent_question_id']) {
-            $parentName = $qNames[$prefix . $q['parent_question_id']] ?? '';
-        }
-        $parent = $parentName ? " data-parent-q='{$parentName}' data-parent-opt='" . htmlspecialchars($q['parent_option_value'], ENT_QUOTES, 'UTF-8') . "' style='display:none;'" : '';
+        "// Data Normalization\n" .
+        "\$eQS = [0 => []]; foreach (\$eS as \$s) \$eQS[\$s['id']] = []; foreach (\$eQ as \$q) \$eQS[\$q['section_id'] ?? 0][] = \$q;\n\n" .
 
-        $h = "<div class='mb-4' id='wrap_{$n}'$parent><label class='form-label'>$txt " . ($r ? '<span class="text-danger">*</span>' : '') . "</label>";
-        if (in_array($t, ['text', 'email', 'tel'])) {
-            $h .= "<input type='$t' class='form-control' name='$n' $r>";
-        } elseif ($t === 'textarea') {
-            $h .= "<textarea class='form-control' name='$n' rows='3' $r></textarea>";
-        } elseif (in_array($t, ['radio', 'checkbox'])) {
-            $h = "<div class='mb-4' id='wrap_{$n}'$parent><p class='mb-3 fw-semibold'>$txt " . ($r ? '<span class=\"text-danger\">*</span>' : '') . "</p><div class='row g-2'>";
-            foreach ($opts as $o) {
-                $oid = md5($n . $o);
-                $h .= "<div class='col-md-6'><div class='form-check'><input type='$t' class='form-check-input' name='{$n}[]' id='$oid' value='" . htmlspecialchars($o, ENT_QUOTES, 'UTF-8') . "' $r><label class='form-check-label' for='$oid'>$o</label></div></div>";
-            }
-            $h .= "</div>";
-        }
-        $h .= "</div>";
-        return $h;
-    };
+        "// Question Name Mapping\n" .
+        "\$qNames = [];\n" .
+        "foreach (\$eQ as \$q) {\n" .
+        "    \$n = 'q_' . \$q['id'];\n" .
+        "    if (stripos(\$q['question_text'], 'nama') !== false || stripos(\$q['question_text'], 'name') !== false) \$n = 'name';\n" .
+        "    elseif (stripos(\$q['question_text'], 'email') !== false) \$n = 'email';\n" .
+        "    elseif (stripos(\$q['question_text'], 'perusahaan') !== false || stripos(\$q['question_text'], 'company') !== false) \$n = 'companyName';\n" .
+        "    elseif (stripos(\$q['question_text'], 'jabatan') !== false || stripos(\$q['question_text'], 'title') !== false) \$n = 'jobTitle';\n" .
+        "    elseif (stripos(\$q['question_text'], 'telepon') !== false || stripos(\$q['question_text'], 'phone') !== false || stripos(\$q['question_text'], 'hp') !== false) \$n = 'mobileNumber';\n" .
+        "    \$qNames['q_' . \$q['id']] = \$n;\n" .
+        "}\n\n" .
 
-    $allSectionsHtml = '';
+        "// Helper: Render Question\n" .
+        "\$renderQ = function(\$q, \$prefix) use (\$qNames) {\n" .
+        "    \$n = \$qNames[\$prefix . \$q['id']]; \$txt = htmlspecialchars(\$q['question_text'], ENT_QUOTES, 'UTF-8');\n" .
+        "    \$t = \$q['question_type']; \$r = \$q['is_required'] ? 'required' : '';\n" .
+        "    \$opts = !empty(\$q['options']) ? json_decode(\$q['options'], true) ?: [] : [];\n" .
+        "    \$parentName = ''; if (isset(\$q['parent_question_id']) && \$q['parent_question_id']) { \$parentName = \$qNames[\$prefix . \$q['parent_question_id']] ?? ''; }\n" .
+        "    \$parent = \$parentName ? \" data-parent-q='{\$parentName}' data-parent-opt='\" . htmlspecialchars(\$q['parent_option_value'], ENT_QUOTES, 'UTF-8') . \"' style='display:none;'\" : '';\n" .
+        "    \$h = \"<div class='mb-4' id='wrap_{\$n}'\$parent><label class='form-label'>\$txt \" . (\$r ? '<span class=\"text-danger\">*</span>' : '') . \"</label>\";\n" .
+        "    if (in_array(\$t, ['text', 'email', 'tel'])) { \$h .= \"<input type='\$t' class='form-control' name='\$n' \$r>\"; }\n" .
+        "    elseif (\$t === 'textarea') { \$h .= \"<textarea class='form-control' name='\$n' rows='3' \$r></textarea>\"; }\n" .
+        "    elseif (in_array(\$t, ['radio', 'checkbox'])) {\n" .
+        "        \$h = \"<div class='mb-4' id='wrap_{\$n}'\$parent><p class='mb-3 fw-semibold'>\$txt \" . (\$r ? '<span class=\"text-danger\">*</span>' : '') . \"</p><div class='row g-2'>\";\n" .
+        "        foreach (\$opts as \$o) { \$oid = md5(\$n . \$o); \$h .= \"<div class='col-md-6'><div class='form-check'><input type='\$t' class='form-check-input' name='{\$n}[]' id='\$oid' value='\" . htmlspecialchars(\$o, ENT_QUOTES, 'UTF-8') . \"' \$r><label class='form-check-label' for='\$oid'>\$o</label></div></div>\"; }\n" .
+        "        \$h .= \"</div>\";\n" .
+        "    } \$h .= \"</div>\"; return \$h;\n" .
+        "};\n\n" .
 
-    $imgSrc = $img;
-    if (!filter_var($img, FILTER_VALIDATE_URL) && !empty($img)) {
-        $imgSrc = "../form-generator/" . $img;
-    }
+        "// Build Sections\n" .
+        "\$allSectionsHtml = '';\n" .
+        "\$rawSections = [];\n" .
+        "\$rawSections[] = ['title' => \$ev['event_name'], 'desc' => \$ev['description'], 'img' => \$ev['header_image'], 'qs' => \$eQS[0], 'prefix' => 'q_', 'is_header' => true, 'layout' => 'standard'];\n" .
+        "foreach (\$eS as \$s) { \$qs = \$eQS[\$s['id']] ?? []; if (!empty(\$qs)) \$rawSections[] = ['title' => \$s['section_title'], 'qs' => \$qs, 'prefix' => 'q_', 'layout' => \$s['layout']]; }\n\n" .
 
-    $rawSections = [];
-    $rawSections[] = ['title' => $name, 'desc' => $desc, 'img' => $imgSrc, 'qs' => $tQS[0], 'prefix' => 'p_', 'is_header' => true, 'layout' => 'standard'];
-    
-    foreach ($tS as $s) {
-        $qs = $tQS[$s['id']] ?? [];
-        if (!empty($qs)) $rawSections[] = ['title' => $s['section_title'], 'qs' => $qs, 'prefix' => 'p_', 'layout' => $s['layout']];
-    }
-    if (!empty($eQS[0])) $rawSections[] = ['title' => '', 'qs' => $eQS[0], 'prefix' => 'q_', 'layout' => 'standard'];
-    foreach ($eS as $s) {
-        $qs = $eQS[$s['id']] ?? [];
-        if (!empty($qs)) $rawSections[] = ['title' => $s['section_title'], 'qs' => $qs, 'prefix' => 'q_', 'layout' => $s['layout']];
-    }
+        "\$steps = [];\n" .
+        "foreach (\$rawSections as \$sec) {\n" .
+        "    if ((\$ev['layout'] ?? 'standard') === 'stepper' || (\$sec['layout'] ?? 'standard') === 'stepper') {\n" .
+        "        if (!empty(\$sec['is_header'])) { \$steps[] = \$sec; }\n" .
+        "        else if ((\$sec['layout'] ?? 'standard') === 'stepper') { foreach (\$sec['qs'] as \$q) { \$steps[] = ['title' => \$sec['title'], 'qs' => [\$q], 'prefix' => \$sec['prefix'], 'layout' => 'standard']; } }\n" .
+        "        else { \$steps[] = \$sec; }\n" .
+        "    } else { \$steps[] = \$sec; }\n" .
+        "}\n\n" .
 
-    $steps = [];
-    foreach ($rawSections as $sec) {
-        if (($ev['layout'] ?? 'standard') === 'stepper' || ($sec['layout'] ?? 'standard') === 'stepper') {
-            // Expand to multiple steps if it's a header or if section layout is stepper
-            if (!empty($sec['is_header'])) {
-                $steps[] = $sec;
-            } else if (($sec['layout'] ?? 'standard') === 'stepper') {
-                foreach ($sec['qs'] as $q) {
-                    $steps[] = ['title' => $sec['title'], 'qs' => [$q], 'prefix' => $sec['prefix'], 'layout' => 'standard'];
-                }
-            } else {
-                $steps[] = $sec;
-            }
-        } else {
-            // Standard or Grid layout at event level, just add the section
-            $steps[] = $sec;
-        }
-    }
+        "foreach (\$steps as \$i => \$sec) {\n" .
+        "    \$isStepperMode = (\$ev['layout'] ?? 'standard') === 'stepper' || array_search('stepper', array_column(\$rawSections, 'layout')) !== false;\n" .
+        "    \$activeClass = (\$isStepperMode && \$i === 0) ? ' active' : '';\n" .
+        "    \$stepStyle = (\$isStepperMode) ? \" class='form-step\$activeClass'\" : \"\";\n" .
+        "    \$gridClass = (\$sec['layout'] === 'grid' && empty(\$sec['is_header'])) ? ' grid-layout' : '';\n" .
+        "    \$allSectionsHtml .= \"<div\$stepStyle><div class='card mb-4 shadow-sm'><div class='card-body\$gridClass'>\";\n" .
+        "    if (!empty(\$sec['is_header'])) {\n" .
+        "        if (\$sec['img']) { \$imgSrc = filter_var(\$sec['img'], FILTER_VALIDATE_URL) ? \$sec['img'] : \"../../\" . \$sec['img']; \$allSectionsHtml .= \"<img src='\$imgSrc' class='rounded-3 mb-4 w-100' style='max-height:200px;object-fit:cover;'>\"; }\n" .
+        "        \$allSectionsHtml .= \"<h4 class='mb-2'>{\$sec['title']}</h4>\";\n" .
+        "        if (\$sec['desc']) \$allSectionsHtml .= \"<p class='text-muted mb-4'>{\$sec['desc']}</p>\";\n" .
+        "        foreach (\$sec['qs'] as \$q) \$allSectionsHtml .= \$renderQ(\$q, \$sec['prefix']);\n" .
+        "    } else {\n" .
+        "        if (\$sec['title']) \$allSectionsHtml .= \"<h5 class='border-bottom pb-2 mb-3 section-title-main'>\".htmlspecialchars(\$sec['title'], ENT_QUOTES, 'UTF-8').\"</h5>\";\n" .
+        "        foreach (\$sec['qs'] as \$q) \$allSectionsHtml .= \$renderQ(\$q, \$sec['prefix']);\n" .
+        "    }\n" .
+        "    if (\$isStepperMode) {\n" .
+        "        \$allSectionsHtml .= \"<div class='mt-4 d-flex justify-content-between step-nav-buttons'>\";\n" .
+        "        if (\$i > 0) \$allSectionsHtml .= \"<button type='button' class='btn-nav' onclick='moveStep(-1)'>← Back</button>\"; else \$allSectionsHtml .= \"<div></div>\";\n" .
+        "        if (\$i < count(\$steps) - 1) \$allSectionsHtml .= \"<button type='button' class='btn-nav' onclick='moveStep(1)'>Next →</button>\";\n" .
+        "        else \$allSectionsHtml .= \"<button type='submit' class='btn btn-submit' style='width:auto;padding-left:40px;padding-right:40px;'>Submit Feedback</button>\";\n" .
+        "        \$allSectionsHtml .= \"</div>\";\n" .
+        "    }\n" .
+        "    \$allSectionsHtml .= \"</div></div></div>\";\n" .
+        "}\n\n" .
 
-    foreach ($steps as $i => $sec) {
-        $isStepperMode = ($ev['layout'] ?? 'standard') === 'stepper' || array_search('stepper', array_column($rawSections, 'layout')) !== false;
-        
-        $activeClass = ($isStepperMode && $i === 0) ? ' active' : '';
-        $stepStyle = ($isStepperMode) ? " class='form-step$activeClass'" : "";
-        $sectionLayout = $sec['layout'] ?? 'standard';
-        $gridClass = ($sectionLayout === 'grid' && empty($sec['is_header'])) ? ' grid-layout' : '';
-        
-        $allSectionsHtml .= "<div$stepStyle><div class='card mb-4 shadow-sm'><div class='card-body$gridClass'>";
-        
-        if (!empty($sec['is_header'])) {
-            if ($sec['img']) $allSectionsHtml .= "<img src='{$sec['img']}' class='rounded-3 mb-4 w-100' style='max-height:200px;object-fit:cover;'>";
-            $allSectionsHtml .= "<h4 class='mb-2'>{$sec['title']}</h4>";
-            if ($sec['desc']) $allSectionsHtml .= "<p class='text-muted mb-4'>{$sec['desc']}</p>";
-            foreach ($sec['qs'] as $q) $allSectionsHtml .= $renderQ($q, $sec['prefix']);
-        } else {
-            if ($sec['title']) $allSectionsHtml .= "<h5 class='border-bottom pb-2 mb-3 section-title-main'>".htmlspecialchars($sec['title'], ENT_QUOTES, 'UTF-8')."</h5>";
-            foreach ($sec['qs'] as $q) $allSectionsHtml .= $renderQ($q, $sec['prefix']);
-        }
+        "// Styling & Rendering\n" .
+        "\$styles = ['default'=>['bg'=>'#f0f2f5','card_bg'=>'#fff','text'=>'#1e293b','primary'=>'#4a6fa5','primary_hover'=>'#3d5d8a','label'=>'#444'],\n" .
+        "'dark'=>['bg'=>'#0f172a','card_bg'=>'#1e293b','text'=>'#f8fafc','primary'=>'#38bdf8','primary_hover'=>'#0ea5e9','label'=>'#cbd5e1'],\n" .
+        "'nature'=>['bg'=>'#f0f4f0','card_bg'=>'#fff','text'=>'#1b4332','primary'=>'#2d6a4f','primary_hover'=>'#1b4332','label'=>'#40916c'],\n" .
+        "'modern'=>['bg'=>'#fafafa','card_bg'=>'#fff','text'=>'#2d3436','primary'=>'#6c5ce7','primary_hover'=>'#a29bfe','label'=>'#636e72'],\n" .
+        "'sunset'=>['bg'=>'#fff7ed','card_bg'=>'#fff','text'=>'#431407','primary'=>'#ea580c','primary_hover'=>'#c2410c','label'=>'#9a3412'],\n" .
+        "'ocean'=>['bg'=>'#e0f2fe','card_bg'=>'#fff','text'=>'#0c4a6e','primary'=>'#0ea5e9','primary_hover'=>'#0369a1','label'=>'#0369a1'],\n" .
+        "'cherry'=>['bg'=>'#fdf2f8','card_bg'=>'#fff','text'=>'#831843','primary'=>'#ec4899','primary_hover'=>'#be185d','label'=>'#db2777'],\n" .
+        "'cyberpunk'=>['bg'=>'#000','card_bg'=>'#111','text'=>'#fef08a','primary'=>'#facc15','primary_hover'=>'#eab308','label'=>'#fde047'],\n" .
+        "'minimalist'=>['bg'=>'#fff','card_bg'=>'#fff','text'=>'#000','primary'=>'#000','primary_hover'=>'#333','label'=>'#666'],\n" .
+        "'vintage'=>['bg'=>'#f5f5dc','card_bg'=>'#fffaf0','text'=>'#5d4037','primary'=>'#8d6e63','primary_hover'=>'#5d4037','label'=>'#795548']];\n" .
+        "\$s = \$styles[\$ev['theme'] ?? 'default'];\n" .
+        "echo \"<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Feedback | {\$ev['event_name']}</title><link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/css/bootstrap.min.css' rel='stylesheet'><style>body{background:{\$s['bg']};color:{\$s['text']};padding:40px 0}.card{background:{\$s['card_bg']};border:0;border-radius:16px;color:{\$s['text']};box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1)}.form-label{font-weight:600;color:{\$s['label']}}.form-control{background:{\$s['card_bg']};color:{\$s['text']};border-radius:10px;padding:12px;border:1px solid rgba(0,0,0,0.1)}.form-control:focus{background:{\$s['card_bg']};color:{\$s['text']};border-color:{\$s['primary']};box-shadow:0 0 0 3px rgba(0,0,0,0.05)}.form-check-input:checked{background-color:{\$s['primary']};border-color:{\$s['primary']}}.btn-submit{background:{\$s['primary']};color:#fff;border:none;border-radius:12px;padding:16px;font-weight:600;width:100%;font-size:1.1rem}.btn-submit:hover{background:{\$s['primary_hover']};color:#fff}.btn-nav{background:rgba(0,0,0,0.05);color:{\$s['text']};border:none;border-radius:10px;padding:10px 20px;font-weight:600}.grid-layout{display:grid;grid-template-columns:1fr 1fr;gap:20px}.grid-layout > .section-title-main {grid-column: span 2}.form-step{display:none}.form-step.active{display:block;animation:fadeIn 0.4s}@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}.text-muted{color:rgba(0,0,0,0.5)!important} \" . (\$ev['theme']==='dark'|| \$ev['theme']==='cyberpunk' ? \".text-muted{color:rgba(255,255,255,0.5)!important} .form-control{border-color:rgba(255,255,255,0.1)} .card{box-shadow: 0 4px 6px -1px rgba(255,255,255,0.05)} .btn-nav{background:rgba(255,255,255,0.1);color:white}\" : \"\") . \"</style><script>document.addEventListener('DOMContentLoaded',function(){var all = document.querySelectorAll('[data-parent-q]');all.forEach(function(el){var parentQ = el.getAttribute('data-parent-q');var parentOpt = el.getAttribute('data-parent-opt');var parentInputs = document.getElementsByName(parentQ + '[]');if(parentInputs.length === 0) parentInputs = document.getElementsByName(parentQ);var showIf = function(){var show = false;parentInputs.forEach(function(inp){if(inp.type === 'radio' || inp.type === 'checkbox') {if(inp.checked && inp.value==parentOpt) show=true;} else {if(inp.value == parentOpt) show=true;}});el.style.display = show ? '' : 'none';};parentInputs.forEach(function(inp){inp.addEventListener('change', showIf);inp.addEventListener('input', showIf);});showIf();});var steps = document.querySelectorAll('.form-step');var currentStep = 0;window.moveStep = function(dir){steps[currentStep].classList.remove('active');currentStep += dir;steps[currentStep].classList.add('active');window.scrollTo(0,0);};});</script></head><body><div class='container'><div class='row justify-content-center'><div class='col-lg-8'>\";\n" .
 
-        if ($isStepperMode) {
-            $allSectionsHtml .= "<div class='mt-4 d-flex justify-content-between step-nav-buttons'>";
-            if ($i > 0) $allSectionsHtml .= "<button type='button' class='btn-nav' onclick='moveStep(-1)'>← Back</button>";
-            else $allSectionsHtml .= "<div></div>";
-            
-            if ($i < count($steps) - 1) {
-                $allSectionsHtml .= "<button type='button' class='btn-nav' onclick='moveStep(1)'>Next →</button>";
-            } else {
-                $allSectionsHtml .= "<button type='submit' class='btn btn-submit' style='width:auto;padding-left:40px;padding-right:40px;'>Submit Feedback</button>";
-            }
-            $allSectionsHtml .= "</div>";
-        }
-        
-        $allSectionsHtml .= "</div></div></div>";
-    }
+        "if(isset(\$_GET['ok'])){\n" .
+        "    \$stype = \$ev['success_type'] ?? 'standard'; \$smsg = htmlspecialchars(\$ev['success_msg'] ?? 'Thank you!', ENT_QUOTES, 'UTF-8');\n" .
+        "    \$allow_multiple = \$ev['allow_multiple'] ?? 1;\n" .
+        "    if(\$stype === 'professional'){ echo \"<div class='card text-center p-5 shadow-lg animate-fade-in' style='margin-top: 50px;'><div class='mb-4' style='color: {\$s['primary']};'><svg width='80' height='80' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><path d='M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'/></svg></div><h2 class='fw-bold mb-3'>Submission Received!</h2><p class='text-muted fs-5 mb-4'>\$smsg</p>\" . (\$allow_multiple ? \"<a href='index.php' class='btn btn-submit px-5' style='width:auto; background:{\$s['primary']};'>Back to Form</a>\" : \"\") . \"</div>\"; }\n" .
+        "    elseif(\$stype === 'modern'){ echo \"<div class='text-center p-5 animate-fade-in' style='margin-top: 80px;'><div class='mb-4 position-relative d-inline-block'><div style='color: {\$s['primary']}; background: {\$s['card_bg']}; border-radius: 50%; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1);'><svg width='40' height='40' fill='none' stroke='currentColor' stroke-width='3' viewBox='0 0 24 24'><path d='M5 13l4 4L19 7'/></svg></div></div><h1 class='display-5 fw-bold mb-4' style='color: {\$s['primary']};'>Great Job!</h1><p class='lead mb-5' style='max-width: 500px; margin-left: auto; margin-right: auto;'>\$smsg</p>\" . (\$allow_multiple ? \"<a href='index.php' class='text-decoration-none fw-bold' style='color: {\$s['primary']};'>← Send another response</a>\" : \"\") . \"</div>\"; }\n" .
+        "    elseif(\$stype === 'minimalist'){ echo \"<div class='py-5 text-center' style='margin-top: 100px;'><p class='fs-4 mb-4' style='font-weight: 300; border-left: 3px solid {\$s['primary']}; padding-left: 20px; display: inline-block;'>\$smsg</p>\" . (\$allow_multiple ? \"<div><a href='index.php' class='small text-muted text-uppercase text-decoration-none' style='letter-spacing: 2px;'>Refresh</a></div>\" : \"\") . \"</div>\"; }\n" .
+        "    else { echo \"<div class='alert alert-success p-4 border-0 shadow-sm rounded-4 text-center' style='margin-top: 50px; background: {\$s['card_bg']};'><h4 class='alert-heading fw-bold mb-3'>Success!</h4><p class='mb-4'>\$smsg</p>\" . (\$allow_multiple ? \"<hr><div class='mt-3'><a href='index.php' class='btn btn-submit' style='width:auto; background:{\$s['primary']};'>Submit Another Response</a></div>\" : \"\") . \"</div>\"; }\n" .
+        "} else {\n" .
+        "    echo \"<form action='submit.php' method='POST' id='mainForm'><input type='hidden' name='id_event' value='\$eid'>\$allSectionsHtml\" . ((\$ev['layout']??'standard')!=='stepper' ? \"<button type='submit' class='btn btn-submit w-100'>Submit Feedback</button>\" : \"\") . \"</form>\";\n" .
+        "}\n" .
+        "echo \"</div></div></div><style>.animate-fade-in{animation:fadeInSuccess 0.8s ease-out;} @keyframes fadeInSuccess{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}</style></body></html>\";\n?>";
 
-    $theme = $ev['theme'] ?? 'default';
-    $styles = [
-        'default' => ['bg' => '#f0f2f5', 'card_bg' => '#ffffff', 'text' => '#1e293b', 'primary' => '#4a6fa5', 'primary_hover' => '#3d5d8a', 'label' => '#444'],
-        'dark' => ['bg' => '#0f172a', 'card_bg' => '#1e293b', 'text' => '#f8fafc', 'primary' => '#38bdf8', 'primary_hover' => '#0ea5e9', 'label' => '#cbd5e1'],
-        'nature' => ['bg' => '#f0f4f0', 'card_bg' => '#ffffff', 'text' => '#1b4332', 'primary' => '#2d6a4f', 'primary_hover' => '#1b4332', 'label' => '#40916c'],
-        'modern' => ['bg' => '#fafafa', 'card_bg' => '#ffffff', 'text' => '#2d3436', 'primary' => '#6c5ce7', 'primary_hover' => '#a29bfe', 'label' => '#636e72'],
-        'sunset' => ['bg' => '#fff7ed', 'card_bg' => '#ffffff', 'text' => '#431407', 'primary' => '#ea580c', 'primary_hover' => '#c2410c', 'label' => '#9a3412'],
-        'ocean' => ['bg' => '#e0f2fe', 'card_bg' => '#ffffff', 'text' => '#0c4a6e', 'primary' => '#0ea5e9', 'primary_hover' => '#0369a1', 'label' => '#0369a1'],
-        'cherry' => ['bg' => '#fdf2f8', 'card_bg' => '#ffffff', 'text' => '#831843', 'primary' => '#ec4899', 'primary_hover' => '#be185d', 'label' => '#db2777'],
-        'cyberpunk' => ['bg' => '#000000', 'card_bg' => '#111111', 'text' => '#fef08a', 'primary' => '#facc15', 'primary_hover' => '#eab308', 'label' => '#fde047'],
-        'minimalist' => ['bg' => '#ffffff', 'card_bg' => '#ffffff', 'text' => '#000000', 'primary' => '#000000', 'primary_hover' => '#333333', 'label' => '#666666'],
-        'vintage' => ['bg' => '#f5f5dc', 'card_bg' => '#fffaf0', 'text' => '#5d4037', 'primary' => '#8d6e63', 'primary_hover' => '#5d4037', 'label' => '#795548']
-    ];
-    $s = $styles[$theme] ?? $styles['default'];
-
-    return "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Feedback | $name</title>" .
-        "<link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/css/bootstrap.min.css' rel='stylesheet'>" .
-        "<style>" .
-        "body{background:{$s['bg']};color:{$s['text']};padding:40px 0}" .
-        ".card{background:{$s['card_bg']};border:0;border-radius:16px;color:{$s['text']};box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1)}" .
-        ".form-label{font-weight:600;color:{$s['label']}}" .
-        ".form-control{background:{$s['card_bg']};color:{$s['text']};border-radius:10px;padding:12px;border:1px solid rgba(0,0,0,0.1)}" .
-        ".form-control:focus{background:{$s['card_bg']};color:{$s['text']};border-color:{$s['primary']};box-shadow:0 0 0 3px rgba(0,0,0,0.05)}" .
-        ".form-check-input:checked{background-color:{$s['primary']};border-color:{$s['primary']}}" .
-        ".btn-submit{background:{$s['primary']};color:#fff;border:none;border-radius:12px;padding:16px;font-weight:600;width:100%;font-size:1.1rem}" .
-        ".btn-submit:hover{background:{$s['primary_hover']};color:#fff}" .
-        ".btn-nav{background:rgba(0,0,0,0.05);color:{$s['text']};border:none;border-radius:10px;padding:10px 20px;font-weight:600}" .
-        ".grid-layout{display:grid;grid-template-columns:1fr 1fr;gap:20px} .grid-layout > .section-title-main {grid-column: span 2}" .
-        ".form-step{display:none} .form-step.active{display:block;animation:fadeIn 0.4s}" .
-        "@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}" .
-        ".text-muted{color:rgba(0,0,0,0.5)!important}" .
-        (($theme === 'dark' || $theme === 'cyberpunk') ? ".text-muted{color:rgba(255,255,255,0.5)!important} .form-control{border-color:rgba(255,255,255,0.1)} .card{box-shadow: 0 4px 6px -1px rgba(255,255,255,0.05)} .btn-nav{background:rgba(255,255,255,0.1);color:white}" : "") .
-        "</style>" .
-        "<script>document.addEventListener('DOMContentLoaded',function(){\n" .
-        "  var all = document.querySelectorAll('[data-parent-q]');\n  all.forEach(function(el){\n    var parentQ = el.getAttribute('data-parent-q');\n    var parentOpt = el.getAttribute('data-parent-opt');\n    var parentInputs = document.getElementsByName(parentQ + '[]');\n    if(parentInputs.length === 0) parentInputs = document.getElementsByName(parentQ);\n    var showIf = function(){\n      var show = false;\n      parentInputs.forEach(function(inp){\n        if(inp.type === 'radio' || inp.type === 'checkbox') {\n          if(inp.checked && inp.value==parentOpt) show=true;\n        } else {\n          if(inp.value == parentOpt) show=true;\n        }\n      });\n      el.style.display = show ? '' : 'none';\n    };\n    parentInputs.forEach(function(inp){\n      inp.addEventListener('change', showIf);\n      inp.addEventListener('input', showIf);\n    });\n    showIf();\n  });\n" .
-        "  var steps = document.querySelectorAll('.form-step');\n  var currentStep = 0;\n  window.moveStep = function(dir){\n    steps[currentStep].classList.remove('active');\n    currentStep += dir;\n    steps[currentStep].classList.add('active');\n    window.scrollTo(0,0);\n  };\n" .
-        "});</script>" .
-        "</head><body>" .
-        "<div class='container'><div class='row justify-content-center'><div class='col-lg-8'>" .
-        "<form action='submit.php' method='POST'>" .
-        "<input type='hidden' name='id_event' value='$eid'>" .
-        $allSectionsHtml .
-        ($layout !== 'stepper' ? "<button type='submit' class='btn btn-submit w-100'>Submit Feedback</button>" : "") .
-        "</form></div></div></div>" .
-        "</body></html>";
+    return $phpCode;
 }
 
 function buildSubmit($eid, $tQ, $eQ) {
-    $n = [];
-    foreach ($tQ as $q) {
-        $name = 'p_' . $q['id'];
-        if (stripos($q['question_text'], 'nama') !== false || stripos($q['question_text'], 'name') !== false) $name = 'name';
-        elseif (stripos($q['question_text'], 'email') !== false) $name = 'email';
-        elseif (stripos($q['question_text'], 'perusahaan') !== false || stripos($q['question_text'], 'company') !== false) $name = 'companyName';
-        elseif (stripos($q['question_text'], 'jabatan') !== false || stripos($q['question_text'], 'title') !== false) $name = 'jobTitle';
-        elseif (stripos($q['question_text'], 'telepon') !== false || stripos($q['question_text'], 'phone') !== false || stripos($q['question_text'], 'hp') !== false) $name = 'mobileNumber';
-        $n[] = $name;
-    }
-    foreach ($eQ as $q) {
-        $name = 'q_' . $q['id'];
-        if (stripos($q['question_text'], 'nama') !== false || stripos($q['question_text'], 'name') !== false) $name = 'name';
-        elseif (stripos($q['question_text'], 'email') !== false) $name = 'email';
-        elseif (stripos($q['question_text'], 'perusahaan') !== false || stripos($q['question_text'], 'company') !== false) $name = 'companyName';
-        elseif (stripos($q['question_text'], 'jabatan') !== false || stripos($q['question_text'], 'title') !== false) $name = 'jobTitle';
-        elseif (stripos($q['question_text'], 'telepon') !== false || stripos($q['question_text'], 'phone') !== false || stripos($q['question_text'], 'hp') !== false) $name = 'mobileNumber';
-        $n[] = $name;
-    }
-    $nj = json_encode($n);
-    return "<?php " .
-        "try { \$p=new PDO('mysql:host=localhost;dbname=feedback_db', 'root', ''); } catch(Exception \$e) { die('DB Error'); } " .
-        "if (\$_SERVER['REQUEST_METHOD']==='POST') { " .
-        "\$d=\$_POST; " .
-        "\$s=\$p->prepare('INSERT INTO respondent(id_event,full_name,email_1,company_name,job_title,mobile_phone)VALUES(?,?,?,?,?,?)'); " .
-        "\$s->execute([\$d['id_event']??'$eid', \$d['name']??'', \$d['email']??'', \$d['companyName']??'', \$d['jobTitle']??'', \$d['mobileNumber']??'']); " .
-        "\$rid=\$p->lastInsertId(); " .
-        "\$s=\$p->prepare('INSERT INTO answer(id_feedback,id_respondent,id_question,answer_text)VALUES(?,?,?,?)'); " .
-        "foreach($nj as \$k) { if(isset(\$d[\$k])) { \$v=is_array(\$d[\$k])?implode('; ',\$d[\$k]):\$d[\$k]; \$s->execute([\$d['id_event']??'$eid', \$rid, \$k, \$v]); } } " .
-        "header('Location:index.php?ok'); exit; } " .
-        "header('Location:index.php');";
+    return "<?php\n" .
+        "// Instant Sync Submission Handler\n" .
+        "error_reporting(E_ALL); ini_set('display_errors', 1);\n" .
+        "\$host = 'localhost'; \$dbname = 'feedback_db'; \$username = 'root'; \$password = '';\n" .
+        "try { \$pdo = new PDO(\"mysql:host=\$host;dbname=\$dbname\", \$username, \$password); \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); } catch (PDOException \$e) { die('DB Error'); }\n\n" .
+        
+        "if (\$_SERVER['REQUEST_METHOD'] === 'POST') {\n" .
+        "    \$eid = '$eid'; \$d = \$_POST;\n\n" .
+
+        "    // Check if event is active\n" .
+        "    \$stmt = \$pdo->prepare(\"SELECT is_active FROM form_generator_config WHERE event_id = ?\");\n" .
+        "    \$stmt->execute([\$eid]);\n" .
+        "    if (!\$stmt->fetchColumn()) die('Submissions for this event are currently closed.');\n\n" .
+        
+        "    // Fetch current questions for mapping\n" .
+        "    \$stmt = \$pdo->prepare(\"SELECT id, question_text FROM form_generator_questions WHERE id_event = ?\");\n" .
+        "    \$stmt->execute([\$eid]); \$eQ = \$stmt->fetchAll(PDO::FETCH_ASSOC);\n\n" .
+        
+        "    \$ev = \$pdo->prepare(\"SELECT template_id FROM form_generator_config WHERE event_id = ?\");\n" .
+        "    \$ev->execute([\$eid]); \$event = \$ev->fetch();\n" .
+        "    \$tQ = []; if (\$event && \$event['template_id']) {\n" .
+        "        \$stmt = \$pdo->prepare(\"SELECT id, question_text FROM form_generator_template_questions WHERE template_id = ?\");\n" .
+        "        \$stmt->execute([\$event['template_id']]); \$tQ = \$stmt->fetchAll(PDO::FETCH_ASSOC);\n" .
+        "    }\n\n" .
+        
+        "    // Map input names to fields\n" .
+        "    \$mapping = [];\n" .
+        "    foreach (\$tQ as \$q) {\n" .
+        "        \$n = 'p_' . \$q['id'];\n" .
+        "        if (stripos(\$q['question_text'], 'nama') !== false || stripos(\$q['question_text'], 'name') !== false) \$n = 'name';\n" .
+        "        elseif (stripos(\$q['question_text'], 'email') !== false) \$n = 'email';\n" .
+        "        elseif (stripos(\$q['question_text'], 'perusahaan') !== false || stripos(\$q['question_text'], 'company') !== false) \$n = 'companyName';\n" .
+        "        elseif (stripos(\$q['question_text'], 'jabatan') !== false || stripos(\$q['question_text'], 'title') !== false) \$n = 'jobTitle';\n" .
+        "        elseif (stripos(\$q['question_text'], 'telepon') !== false || stripos(\$q['question_text'], 'phone') !== false || stripos(\$q['question_text'], 'hp') !== false) \$n = 'mobileNumber';\n" .
+        "        \$mapping[\$n] = 'p_' . \$q['id'];\n" .
+        "    }\n" .
+        "    foreach (\$eQ as \$q) {\n" .
+        "        \$n = 'q_' . \$q['id'];\n" .
+        "        if (stripos(\$q['question_text'], 'nama') !== false || stripos(\$q['question_text'], 'name') !== false) \$n = 'name';\n" .
+        "        elseif (stripos(\$q['question_text'], 'email') !== false) \$n = 'email';\n" .
+        "        elseif (stripos(\$q['question_text'], 'perusahaan') !== false || stripos(\$q['question_text'], 'company') !== false) \$n = 'companyName';\n" .
+        "        elseif (stripos(\$q['question_text'], 'jabatan') !== false || stripos(\$q['question_text'], 'title') !== false) \$n = 'jobTitle';\n" .
+        "        elseif (stripos(\$q['question_text'], 'telepon') !== false || stripos(\$q['question_text'], 'phone') !== false || stripos(\$q['question_text'], 'hp') !== false) \$n = 'mobileNumber';\n" .
+        "        \$mapping[\$n] = 'q_' . \$q['id'];\n" .
+        "    }\n\n" .
+        
+        "    // Insert Respondent\n" .
+        "    \$stmt = \$pdo->prepare(\"INSERT INTO respondent(id_event, full_name, email_1, company_name, job_title, mobile_phone) VALUES (?,?,?,?,?,?)\");\n" .
+        "    \$stmt->execute([\$eid, \$d['name']??'', \$d['email']??'', \$d['companyName']??'', \$d['jobTitle']??'', \$d['mobileNumber']??'']);\n" .
+        "    \$rid = \$pdo->lastInsertId();\n\n" .
+        
+        "    // Insert Answers\n" .
+        "    \$stmt = \$pdo->prepare(\"INSERT INTO answer(id_feedback, id_respondent, id_question, answer_text) VALUES (?,?,?,?)\");\n" .
+        "    foreach (\$mapping as \$inputName => \$qId) {\n" .
+        "        if (isset(\$d[\$inputName])) {\n" .
+        "            \$val = is_array(\$d[\$inputName]) ? implode('; ', \$d[\$inputName]) : \$d[\$inputName];\n" .
+        "            \$stmt->execute([\$eid, \$rid, \$inputName, \$val]);\n" .
+        "        }\n" .
+        "    }\n" .
+        "    header('Location: index.php?ok'); exit;\n" .
+        "}\n" .
+        "header('Location: index.php');\n?>";
 }
 
 $tplName = $tpl ? $tpl['template_name'] : '';
@@ -976,6 +978,13 @@ $evtName = $evt ? $evt['event_name'] : '';
                         <small class="text-muted">ID: <?php echo htmlspecialchars($evtId); ?></small>
                     </div>
                     <div class="d-flex gap-2">
+                        <?php 
+                        $fullUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['PHP_SELF']) . "/generated_forms/" . $evtId . "/";
+                        ?>
+                        <button type="button" class="btn btn-outline-success d-flex align-items-center gap-2" onclick="copyToClipboard('<?php echo $fullUrl; ?>')">
+                            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+                            Share Link
+                        </button>
                         <a href="feedback.php?evt=<?php echo urlencode($evtId); ?>" class="btn btn-outline-primary d-flex align-items-center gap-2">
                             <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                             View Analytics
@@ -1037,6 +1046,39 @@ $evtName = $evt ? $evt['event_name'] : '';
                                     <option value="grid" <?php echo ($evt['layout'] ?? '') === 'grid' ? 'selected' : ''; ?>>Grid (2-Column Questions)</option>
                                 </select>
                             </div>
+                            
+                            <hr class="my-4">
+                            <h6 class="mb-3 fw-bold">Success Page (After Submit)</h6>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Success Message</label>
+                                <textarea name="smsg" class="form-control" rows="2" placeholder="e.g.: Thank you for your participation!"><?php echo htmlspecialchars($evt['success_msg'] ?? 'Thank you! Your feedback has been successfully submitted.'); ?></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Success Template</label>
+                                <select name="stype" class="form-select">
+                                    <option value="standard" <?php echo ($evt['success_type'] ?? '') === 'standard' ? 'selected' : ''; ?>>Standard (Simple Alert)</option>
+                                    <option value="professional" <?php echo ($evt['success_type'] ?? '') === 'professional' ? 'selected' : ''; ?>>Professional (Icon & Center)</option>
+                                    <option value="modern" <?php echo ($evt['success_type'] ?? '') === 'modern' ? 'selected' : ''; ?>>Modern (Animated & Full)</option>
+                                    <option value="minimalist" <?php echo ($evt['success_type'] ?? '') === 'minimalist' ? 'selected' : ''; ?>>Minimalist (Clean Text)</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="is_active" id="eventActive" <?php echo ($evt['is_active'] ?? 1) ? 'checked' : ''; ?>>
+                                    <label class="form-check-label fw-bold" for="eventActive">Event Status (Active)</label>
+                                </div>
+                                <small class="text-muted">Uncheck to temporarily close the feedback form for participants.</small>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="allow_multiple" id="allowMultiple" <?php echo ($evt['allow_multiple'] ?? 1) ? 'checked' : ''; ?>>
+                                    <label class="form-check-label fw-bold" for="allowMultiple">Allow Multiple Responses</label>
+                                </div>
+                                <small class="text-muted">Allow participants to submit another response after completion.</small>
+                            </div>
+
                             <button type="submit" class="btn btn-secondary">Save Settings</button>
                         </form>
                     </div>
@@ -1421,6 +1463,14 @@ async function updateQuestion(id, text, tab) {
     } catch (e) {
         console.error('Update failed', e);
     }
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Share link copied to clipboard!');
+    }).catch(err => {
+        console.error('Failed to copy: ', err);
+    });
 }
 
 // Scroll persistence for editor-pane
