@@ -23,8 +23,10 @@ if (!$evtId) {
     exit;
 }
 
+$showTrashedEvent = isset($_GET['show_trashed']);
+
 // Fetch event details
-$stmt = $pdo->prepare("SELECT * FROM form_generator_config WHERE event_id = ?");
+$stmt = $pdo->prepare("SELECT * FROM form_generator_config WHERE event_id = ?" . ($showTrashedEvent ? "" : " AND deleted_at IS NULL"));
 $stmt->execute([$evtId]);
 $event = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -33,34 +35,31 @@ if (!$event) {
 }
 
 // Fetch respondents
-$stmt = $pdo->prepare("SELECT * FROM respondent WHERE id_event = ? ORDER BY created_at DESC");
+$resQuery = "SELECT * FROM respondent WHERE id_event = ? " . ($showTrashedEvent ? "" : " AND deleted_at IS NULL") . " ORDER BY created_at DESC";
+$stmt = $pdo->prepare($resQuery);
 $stmt->execute([$evtId]);
 $respondents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Fetch all questions for this event (including template questions)
-$stmt = $pdo->prepare("SELECT * FROM form_generator_questions WHERE id_event = ? ORDER BY sort_order ASC");
+// Fetch all sections and questions
+$stmt = $pdo->prepare("SELECT * FROM form_generator_event_sections WHERE event_id = ? ORDER BY sort_order ASC");
 $stmt->execute([$evtId]);
-$eventQs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$stmt = $pdo->prepare("SELECT * FROM form_generator_questions WHERE id_event = ? ORDER BY section_id ASC, sort_order ASC");
+$stmt->execute([$evtId]);
+$allQs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$qsBySection = [];
+foreach ($allQs as $q) {
+    $qsBySection[$q['section_id']][] = $q;
+}
 
 // Analytics Logic
 $analytics = [];
-foreach ($eventQs as $q) {
+foreach ($allQs as $q) {
     if (in_array($q['question_type'], ['radio', 'checkbox'])) {
-        $qId = 'q_' . $q['id'];
-        // Also check for mapped names if needed, but the answer table usually uses the generated ID
-        // Let's check how buildSubmit saves it.
-        // buildSubmit uses 'name', 'email' etc for template Qs and 'q_ID' for event Qs.
-        // Wait, I updated buildSubmit to use intelligent mapping for ALL questions now.
-        // So I need to use the same mapping logic here to find answers.
+        $n = getQuestionName($q);
 
-        $n = 'q_' . $q['id'];
-        if (stripos($q['question_text'], 'nama') !== false || stripos($q['question_text'], 'name') !== false) $n = 'name';
-        elseif (stripos($q['question_text'], 'email') !== false) $n = 'email';
-        elseif (stripos($q['question_text'], 'perusahaan') !== false || stripos($q['question_text'], 'company') !== false) $n = 'companyName';
-        elseif (stripos($q['question_text'], 'jabatan') !== false || stripos($q['question_text'], 'title') !== false) $n = 'jobTitle';
-        elseif (stripos($q['question_text'], 'telepon') !== false || stripos($q['question_text'], 'phone') !== false || stripos($q['question_text'], 'hp') !== false) $n = 'mobileNumber';
-
-        $stmt = $pdo->prepare("SELECT answer_text FROM answer WHERE id_feedback = ? AND id_question = ?");
+        $stmt = $pdo->prepare("SELECT a.answer_text FROM answer a JOIN respondent r ON a.id_respondent = r.id WHERE r.id_event = ? AND a.id_question = ?" . ($showTrashedEvent ? "" : " AND r.deleted_at IS NULL"));
         $stmt->execute([$evtId, $n]);
         $answers = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
@@ -69,11 +68,10 @@ foreach ($eventQs as $q) {
         foreach ($options as $opt) $stats[$opt] = 0;
 
         foreach ($answers as $ans) {
-            // Checkbox answers might be separated by '; '
             $parts = explode('; ', $ans);
             foreach ($parts as $p) {
                 if (isset($stats[$p])) $stats[$p]++;
-                else $stats[$p] = 1; // Catch custom values
+                else $stats[$p] = 1;
             }
         }
         $analytics[] = [
@@ -92,6 +90,17 @@ $rawAnswers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 foreach ($rawAnswers as $a) {
     $answersByRespondent[$a['id_respondent']][$a['id_question']] = $a['answer_text'];
 }
+
+function getQuestionName($q) {
+    $n = 'q_' . $q['id'];
+    $txt = strtolower(trim($q['question_text']));
+    if (in_array($txt, ['nama', 'name', 'full name', 'nama lengkap'])) return 'name';
+    if ($txt === 'email') return 'email';
+    if (in_array($txt, ['perusahaan', 'company', 'company name'])) return 'companyName';
+    if (in_array($txt, ['jabatan', 'title', 'job title'])) return 'jobTitle';
+    if (in_array($txt, ['telepon', 'phone', 'hp', 'mobile phone'])) return 'mobileNumber';
+    return $n;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -100,7 +109,6 @@ foreach ($rawAnswers as $a) {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Feedback Analytics | <?php echo htmlspecialchars($event['event_name']); ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root { --primary: #4a6fa5; --bg: #f8fafc; }
@@ -110,141 +118,93 @@ foreach ($rawAnswers as $a) {
         .nav-link { border: none; color: #64748b; font-weight: 600; padding: 12px 24px; }
         .nav-link.active { color: var(--primary); border-bottom: 2px solid var(--primary); background: none; }
         .table thead { background: #f1f5f9; }
-        .progress { height: 10px; border-radius: 5px; }
     </style>
 </head>
 <body>
 
 <nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom py-3 mb-4">
     <div class="container">
-        <a class="navbar-brand fw-bold text-primary" href="home.php">
-            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="me-2"><path d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-            Back to Dashboard
-        </a>
+        <a class="navbar-brand fw-bold text-primary" href="home.php">Back to Dashboard</a>
         <span class="navbar-text fw-bold text-dark">
             <?php echo htmlspecialchars($event['event_name']); ?> Analytics
         </span>
-    </div>
-</nav>
+        <a href="export.php?evt=<?php echo urlencode($evtId); ?>" class="btn btn-success ms-3">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="me-1"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Export CSV
+        </a>
+        </div>
+        </nav>
+
 
 <div class="container pb-5">
-    <div class="row mb-4">
-        <div class="col-md-4">
-            <div class="card p-4 text-center">
-                <h6 class="text-muted text-uppercase small fw-bold">Total Respondents</h6>
-                <h2 class="mb-0 fw-bold"><?php echo count($respondents); ?></h2>
-            </div>
-        </div>
-    </div>
-
-    <ul class="nav nav-tabs mb-4" id="feedbackTabs" role="tablist">
-        <li class="nav-item">
-            <button class="nav-link active" id="analytics-tab" data-bs-toggle="tab" data-bs-target="#analytics" type="button">Visual Analytics</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link" id="responses-tab" data-bs-toggle="tab" data-bs-target="#responses" type="button">Raw Responses</button>
-        </li>
+    <ul class="nav nav-tabs mb-4">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#analytics">Visual Analytics</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#responses">Raw Responses</button></li>
     </ul>
 
-    <div class="tab-content" id="feedbackTabsContent">
-        <!-- Analytics Tab -->
-        <div class="tab-pane fade show active" id="analytics" role="tabpanel">
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="analytics">
             <div class="row">
-                <?php if (empty($analytics)): ?>
-                    <div class="col-12">
-                        <div class="card p-5 text-center">
-                            <p class="text-muted mb-0">No choice-based questions found for analytics.</p>
-                        </div>
-                    </div>
-                <?php endif; ?>
                 <?php foreach ($analytics as $index => $stat): ?>
-                    <div class="col-lg-6">
-                        <div class="card">
-                            <div class="card-body p-4">
-                                <h6 class="fw-bold mb-4"><?php echo htmlspecialchars($stat['question']); ?></h6>
-                                <?php 
-                                $chartId = "chart_" . $index;
-                                $labels = array_keys($stat['stats']);
-                                $data = array_values($stat['stats']);
-                                ?>
-                                <canvas id="<?php echo $chartId; ?>" class="mb-4" style="max-height: 250px;"></canvas>
-                                
-                                <div class="mt-3">
-                                    <?php foreach ($stat['stats'] as $label => $count): 
-                                        $percent = $stat['total'] > 0 ? round(($count / $stat['total']) * 100) : 0;
-                                    ?>
-                                        <div class="mb-3">
-                                            <div class="d-flex justify-content-between mb-1">
-                                                <span class="small fw-medium"><?php echo htmlspecialchars($label); ?></span>
-                                                <span class="small text-muted"><?php echo $count; ?> (<?php echo $percent; ?>%)</span>
-                                            </div>
-                                            <div class="progress">
-                                                <div class="progress-bar" style="width: <?php echo $percent; ?>%; background-color: var(--primary)"></div>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
+                    <div class="col-lg-4 col-md-6">
+                        <div class="card p-3">
+                            <h6 class="fw-bold mb-3 small"><?php echo htmlspecialchars($stat['question']); ?></h6>
+                            <div style="height: 150px;">
+                                <canvas id="chart_<?php echo $index; ?>"></canvas>
                             </div>
                         </div>
                         <script>
-                        new Chart(document.getElementById('<?php echo $chartId; ?>'), {
-                            type: 'doughnut',
-                            data: {
-                                labels: <?php echo json_encode($labels); ?>,
-                                datasets: [{
-                                    data: <?php echo json_encode($data); ?>,
-                                    backgroundColor: ['#4a6fa5', '#6c5ce7', '#2d6a4f', '#ea580c', '#ec4899', '#0ea5e9']
-                                }]
-                            },
-                            options: { plugins: { legend: { display: false } } }
-                        });
+                        (function() {
+                            const ctx = document.getElementById('chart_<?php echo $index; ?>').getContext('2d');
+                            new Chart(ctx, {
+                                type: 'doughnut',
+                                data: {
+                                    labels: <?php echo json_encode(array_keys($stat['stats'])); ?>,
+                                    datasets: [{
+                                        data: <?php echo json_encode(array_values($stat['stats'])); ?>,
+                                        backgroundColor: ['#4a6fa5', '#6c5ce7', '#2d6a4f', '#ea580c', '#ec4899', '#0ea5e9']
+                                    }]
+                                },
+                                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 10, fontSize: 10 } } } }
+                            });
+                        })();
                         </script>
                     </div>
                 <?php endforeach; ?>
             </div>
         </div>
 
-        <!-- Responses Tab -->
-        <div class="tab-pane fade" id="responses" role="tabpanel">
+        <div class="tab-pane fade" id="responses">
             <div class="card overflow-hidden">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
                         <thead>
                             <tr>
                                 <th class="ps-4">Date</th>
-                                <th>Name</th>
-                                <th>Email</th>
-                                <th>Organization</th>
-                                <?php foreach ($eventQs as $q): 
-                                    // Skip generic personal info already in columns
-                                    if (stripos($q['question_text'], 'name') !== false || stripos($q['question_text'], 'email') !== false) continue;
+                                <?php 
+                                foreach ($sections as $s): 
+                                    foreach ($qsBySection[$s['id']] ?? [] as $q):
                                 ?>
-                                    <th style="min-width: 200px;"><?php echo htmlspecialchars($q['question_text']); ?></th>
-                                <?php endforeach; ?>
+                                    <th style="min-width: 150px;"><?php echo htmlspecialchars($q['question_text']); ?></th>
+                                <?php endforeach; endforeach; ?>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if (empty($respondents)): ?>
-                                <tr><td colspan="10" class="text-center py-5 text-muted">No responses yet.</td></tr>
-                            <?php endif; ?>
                             <?php foreach ($respondents as $r): ?>
                                 <tr>
                                     <td class="ps-4 small text-muted"><?php echo date('d M Y H:i', strtotime($r['created_at'])); ?></td>
-                                    <td class="fw-medium"><?php echo htmlspecialchars($r['full_name']); ?></td>
-                                    <td><?php echo htmlspecialchars($r['email_1']); ?></td>
-                                    <td><?php echo htmlspecialchars($r['company_name']); ?></td>
-                                    <?php foreach ($eventQs as $q): 
-                                        if (stripos($q['question_text'], 'name') !== false || stripos($q['question_text'], 'email') !== false) continue;
-                                        
-                                        $n = 'q_' . $q['id'];
-                                        if (stripos($q['question_text'], 'perusahaan') !== false || stripos($q['question_text'], 'company') !== false) $n = 'companyName';
-                                        elseif (stripos($q['question_text'], 'jabatan') !== false || stripos($q['question_text'], 'title') !== false) $n = 'jobTitle';
-                                        elseif (stripos($q['question_text'], 'telepon') !== false || stripos($q['question_text'], 'phone') !== false || stripos($q['question_text'], 'hp') !== false) $n = 'mobileNumber';
-                                        
-                                        $ans = $answersByRespondent[$r['id']][$n] ?? '-';
+                                    <?php foreach ($sections as $s): 
+                                        foreach ($qsBySection[$s['id']] ?? [] as $q): 
+                                            $n = getQuestionName($q);
+                                            if ($n === 'name') $ans = $r['full_name'];
+                                            elseif ($n === 'email') $ans = $r['email_1'];
+                                            elseif ($n === 'companyName') $ans = $r['company_name'];
+                                            elseif ($n === 'jobTitle') $ans = $r['job_title'];
+                                            elseif ($n === 'mobileNumber') $ans = $r['mobile_phone'];
+                                            else $ans = $answersByRespondent[$r['id']][$n] ?? '-';
                                     ?>
                                         <td class="small"><?php echo htmlspecialchars($ans); ?></td>
-                                    <?php endforeach; ?>
+                                    <?php endforeach; endforeach; ?>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -254,7 +214,6 @@ foreach ($rawAnswers as $a) {
         </div>
     </div>
 </div>
-
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

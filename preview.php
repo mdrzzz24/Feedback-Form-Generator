@@ -30,7 +30,8 @@ $layout = 'standard';
 
 if ($evtId) {
     // Preview event
-    $stmt = $pdo->prepare("SELECT * FROM form_generator_config WHERE event_id = ?");
+    $showTrashed = isset($_GET['show_trashed']) ? "" : " AND deleted_at IS NULL";
+    $stmt = $pdo->prepare("SELECT * FROM form_generator_config WHERE event_id = ?" . $showTrashed);
     $stmt->execute([$evtId]);
     $event = $stmt->fetch(PDO::FETCH_ASSOC);
 

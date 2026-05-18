@@ -19,10 +19,8 @@ try {
 
 $msg = '';
 $msgType = 'success';
-$tab = 'templates';
-if (isset($_GET['tab'])) {
-    $tab = $_GET['tab'] == 'events' ? 'events' : 'templates';
-}
+$tplId = 0;
+$tab = 'events';
 
 // Handle Actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
@@ -30,60 +28,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
 
     try {
         switch ($action) {
-            case 'create_template':
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template (template_name) VALUES (?)");
-                $stmt->execute([$_POST['name']]);
-                $newId = $pdo->lastInsertId();
-                // Create default section
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template_sections (template_id, section_title, sort_order) VALUES (?, 'Participant Information', 1)");
-                $stmt->execute([$newId]);
-                $sectionId = $pdo->lastInsertId();
-                // Add default questions
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template_questions (template_id, section_id, question_text, question_type, is_required, options, sort_order) VALUES (?, ?, 'Full Name', 'text', 1, '', 1)");
-                $stmt->execute([$newId, $sectionId]);
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template_questions (template_id, section_id, question_text, question_type, is_required, options, sort_order) VALUES (?, ?, 'Email', 'email', 1, '', 2)");
-                $stmt->execute([$newId, $sectionId]);
-                $msg = "Template successfully created!";
-                break;
-
-            case 'create_template_section':
-                $stmt = $pdo->prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM form_generator_template_sections WHERE template_id = ?");
-                $stmt->execute([$_POST['tid']]);
-                $order = $stmt->fetchColumn();
-                $stitle = !empty($_POST['stitle']) ? $_POST['stitle'] : null;
-                $slayout = $_POST['slayout'] ?? 'standard';
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template_sections (template_id, section_title, sort_order, layout) VALUES (?, ?, ?, ?)");
-                $stmt->execute([$_POST['tid'], $stitle, $order, $slayout]);
-                $newSectionId = $pdo->lastInsertId();
-                // Add default question
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template_questions (template_id, section_id, question_text, question_type, is_required, sort_order) VALUES (?, ?, 'New question', 'text', 0, 1)");
-                $stmt->execute([$_POST['tid'], $newSectionId]);
-                $msg = "Section added!";
-                break;
-
-            case 'del_template_section':
-                $stmt = $pdo->prepare("DELETE FROM form_generator_template_questions WHERE section_id = ?");
-                $stmt->execute([$_POST['id']]);
-                $stmt = $pdo->prepare("DELETE FROM form_generator_template_sections WHERE id = ?");
-                $stmt->execute([$_POST['id']]);
-                $msg = "Section deleted!";
-                break;
-
-            case 'update_template_section':
-                $stitle = !empty($_POST['stitle']) ? $_POST['stitle'] : null;
-                $slayout = $_POST['slayout'] ?? 'standard';
-                $stmt = $pdo->prepare("UPDATE form_generator_template_sections SET section_title = ?, layout = ? WHERE id = ?");
-                $stmt->execute([$stitle, $slayout, $_POST['id']]);
-                $msg = "Section updated!";
-                break;
-
             case 'update_event_section':
                 $stitle = !empty($_POST['stitle']) ? $_POST['stitle'] : null;
                 $slayout = $_POST['slayout'] ?? 'standard';
                 $stmt = $pdo->prepare("UPDATE form_generator_event_sections SET section_title = ?, layout = ? WHERE id = ?");
                 $stmt->execute([$stitle, $slayout, $_POST['id']]);
                 $msg = "Section updated!";
-                $tab = 'events';
                 break;
 
             case 'update_event_q_text':
@@ -91,67 +41,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                 $stmt->execute([$_POST['text'], $_POST['id']]);
                 exit; // End execution for AJAX call
 
-            case 'update_template_q_text':
-                $stmt = $pdo->prepare("UPDATE form_generator_template_questions SET question_text = ? WHERE id = ?");
-                $stmt->execute([$_POST['text'], $_POST['id']]);
-                exit; // End execution for AJAX call
-
-            case 'add_template_q':
-                $opts = '';
-                if (!empty($_POST['opts'])) {
-                    $arr = explode(',', $_POST['opts']);
-                    $arr = array_map('trim', $arr);
-                    $opts = json_encode($arr);
-                }
-                $parent_qid = !empty($_POST['parent_question_id']) ? $_POST['parent_question_id'] : null;
-                $parent_opt = !empty($_POST['parent_option_value']) ? $_POST['parent_option_value'] : null;
-                $stmt = $pdo->prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM form_generator_template_questions WHERE section_id = ?");
-                $stmt->execute([$_POST['sid']]);
-                $order = $stmt->fetchColumn();
-                $stmt = $pdo->prepare("INSERT INTO form_generator_template_questions (template_id, section_id, question_text, question_type, is_required, options, sort_order, parent_question_id, parent_option_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-                $stmt->execute([
-                    $_POST['tid'], $_POST['sid'], $_POST['qtext'], $_POST['qtype'], isset($_POST['req']) ? 1 : 0, $opts, $order, $parent_qid, $parent_opt
-                ]);
-                $msg = "Question added!";
-                break;
-
-            case 'del_template_q':
-                $stmt = $pdo->prepare("DELETE FROM form_generator_template_questions WHERE id = ?");
-                $stmt->execute([$_POST['id']]);
-                $msg = "Question deleted!";
-                break;
-
-            case 'update_template_q':
-                $stmt = $pdo->prepare("UPDATE form_generator_template_questions SET question_text = ?, question_type = ?, is_required = ?, options = ?, parent_question_id = ?, parent_option_value = ? WHERE id = ?");
-                $opts = '';
-                if (!empty($_POST['opts'])) {
-                    $arr = array_map('trim', explode(',', $_POST['opts']));
-                    $opts = json_encode($arr);
-                }
-                $parent_qid = !empty($_POST['parent_question_id']) ? $_POST['parent_question_id'] : null;
-                $parent_opt = !empty($_POST['parent_option_value']) ? $_POST['parent_option_value'] : null;
-                $stmt->execute([
-                    $_POST['qtext'], $_POST['qtype'], isset($_POST['req']) ? 1 : 0, $opts, $parent_qid, $parent_opt, $_POST['id']
-                ]);
-                $msg = "Question updated!";
-                break;
-
-            case 'del_template':
-                $stmt = $pdo->prepare("DELETE FROM form_generator_template_questions WHERE template_id = ?");
-                $stmt->execute([$_POST['id']]);
-                $stmt = $pdo->prepare("DELETE FROM form_generator_template_sections WHERE template_id = ?");
-                $stmt->execute([$_POST['id']]);
-                $stmt = $pdo->prepare("DELETE FROM form_generator_template WHERE id = ?");
-                $stmt->execute([$_POST['id']]);
-                $msg = "Template deleted!";
-                $msgType = 'danger';
-                break;
-
             case 'toggle_event_status':
                 $stmt = $pdo->prepare("UPDATE form_generator_config SET is_active = NOT is_active WHERE event_id = ?");
                 $stmt->execute([$_POST['id']]);
                 $msg = "Event status updated!";
-                $tab = 'events';
                 break;
 
             case 'create_event':
@@ -229,24 +122,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                 }
 
                 $msg = "Event settings saved and synced!";
-                $tab = 'events';
-                break;
-
-            case 'move_template_section':
-                $stmt = $pdo->prepare("SELECT sort_order FROM form_generator_template_sections WHERE id = ?");
-                $stmt->execute([$_POST['id']]);
-                $current = $stmt->fetchColumn();
-                if ($_POST['dir'] === 'up') {
-                    $stmt = $pdo->prepare("SELECT id, sort_order FROM form_generator_template_sections WHERE template_id = ? AND sort_order < ? ORDER BY sort_order DESC LIMIT 1");
-                } else {
-                    $stmt = $pdo->prepare("SELECT id, sort_order FROM form_generator_template_sections WHERE template_id = ? AND sort_order > ? ORDER BY sort_order ASC LIMIT 1");
-                }
-                $stmt->execute([$_POST['tid'], $current]);
-                $other = $stmt->fetch();
-                if ($other) {
-                    $pdo->prepare("UPDATE form_generator_template_sections SET sort_order = ? WHERE id = ?")->execute([$other['sort_order'], $_POST['id']]);
-                    $pdo->prepare("UPDATE form_generator_template_sections SET sort_order = ? WHERE id = ?")->execute([$current, $other['id']]);
-                }
                 break;
 
             case 'move_event_section':
@@ -264,7 +139,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                     $pdo->prepare("UPDATE form_generator_event_sections SET sort_order = ? WHERE id = ?")->execute([$other['sort_order'], $_POST['id']]);
                     $pdo->prepare("UPDATE form_generator_event_sections SET sort_order = ? WHERE id = ?")->execute([$current, $other['id']]);
                 }
-                $tab = 'events';
                 break;
 
             case 'create_event_section':
@@ -279,7 +153,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                 $stmt = $pdo->prepare("INSERT INTO form_generator_questions (id_event, section_id, question_text, question_type, is_required, sort_order) VALUES (?, ?, 'New question', 'text', 0, 1)");
                 $stmt->execute([$_POST['eid'], $newSectionId]);
                 $msg = "Section added!";
-                $tab = 'events';
                 break;
 
             case 'del_event_section':
@@ -288,7 +161,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                 $stmt = $pdo->prepare("DELETE FROM form_generator_event_sections WHERE id = ?");
                 $stmt->execute([$_POST['id']]);
                 $msg = "Section deleted!";
-                $tab = 'events';
                 break;
 
             case 'add_event_q':
@@ -307,14 +179,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                     $_POST['eid'], $_POST['sid'], $_POST['qtext'], $_POST['qtype'], isset($_POST['req']) ? 1 : 0, $opts, $order, $parent_qid, $parent_opt
                 ]);
                 $msg = "Question added!";
-                $tab = 'events';
                 break;
 
             case 'del_event_q':
                 $stmt = $pdo->prepare("DELETE FROM form_generator_questions WHERE id = ?");
                 $stmt->execute([$_POST['id']]);
                 $msg = "Question deleted!";
-                $tab = 'events';
                 break;
 
             case 'update_event_q':
@@ -330,19 +200,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                     $_POST['qtext'], $_POST['qtype'], isset($_POST['req']) ? 1 : 0, $opts, $parent_qid, $parent_opt, $_POST['id']
                 ]);
                 $msg = "Question updated!";
-                $tab = 'events';
                 break;
 
             case 'del_event':
-                $stmt = $pdo->prepare("DELETE FROM form_generator_questions WHERE id_event = ?");
+                $stmt = $pdo->prepare("UPDATE form_generator_config SET deleted_at = NOW() WHERE event_id = ?");
                 $stmt->execute([$_POST['id']]);
-                $stmt = $pdo->prepare("DELETE FROM form_generator_event_sections WHERE event_id = ?");
+                $msg = "Event moved to trash!";
+                $msgType = 'warning';
+                $evtId = ''; // Reset selection
+                break;
+
+            case 'del_event_feedback':
+                $stmt = $pdo->prepare("UPDATE respondent SET deleted_at = NOW() WHERE id_event = ?");
                 $stmt->execute([$_POST['id']]);
-                $stmt = $pdo->prepare("DELETE FROM form_generator_config WHERE event_id = ?");
-                $stmt->execute([$_POST['id']]);
-                $msg = "Event deleted!";
-                $msgType = 'danger';
-                $tab = 'events';
+                $msg = "All feedback for this event has been moved to trash!";
+                $msgType = 'warning';
                 break;
 
             case 'generate':
@@ -368,7 +240,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
                     file_put_contents("$dir/submit.php", buildSubmit($eid, $tplQ, $evtQ));
                     $msg = "Form successfully generated! <a href='generated_forms/$eid/index.php' target='_blank' class='alert-link'>Open Form</a>";
                 }
-                $tab = 'events';
                 break;
         }
     } catch (Exception $e) {
@@ -380,35 +251,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo && isset($_POST['action'])) {
 // Load Data
 $templates = [];
 $events = [];
-$tplId = 0;
 $evtId = '';
-$tpl = null;
-$tplQs = [];
-$tplSections = [];
 $evt = null;
 $evtQs = [];
 $evtSections = [];
 
 if ($pdo) {
     $templates = $pdo->query("SELECT * FROM form_generator_template ORDER BY id DESC")->fetchAll();
-    $events = $pdo->query("SELECT * FROM form_generator_config ORDER BY created_at DESC")->fetchAll();
-
-    if (isset($_GET['tpl']) && is_numeric($_GET['tpl'])) {
-        $tplId = intval($_GET['tpl']);
-        $stmt = $pdo->prepare("SELECT * FROM form_generator_template WHERE id = ?");
-        $stmt->execute([$tplId]);
-        $tpl = $stmt->fetch();
-        if ($tpl) {
-            $stmt = $pdo->prepare("SELECT * FROM form_generator_template_sections WHERE template_id = ? ORDER BY sort_order ASC, id ASC");
-            $stmt->execute([$tplId]);
-            $tplSections = $stmt->fetchAll();
-            foreach ($tplSections as $s) {
-                $stmt = $pdo->prepare("SELECT * FROM form_generator_template_questions WHERE section_id = ? ORDER BY sort_order ASC, id ASC");
-                $stmt->execute([$s['id']]);
-                $tplQs[$s['id']] = $stmt->fetchAll();
-            }
-        }
-    }
+    $events = $pdo->query("SELECT * FROM form_generator_config WHERE deleted_at IS NULL ORDER BY created_at DESC")->fetchAll();
 
     if (isset($_GET['evt']) && !empty($_GET['evt'])) {
         $evtId = $_GET['evt'];
@@ -484,11 +334,11 @@ function buildForm($ev, $tQ, $eQ, $tS = [], $eS = []) {
         "    \$parentName = ''; if (isset(\$q['parent_question_id']) && \$q['parent_question_id']) { \$parentName = \$qNames[\$prefix . \$q['parent_question_id']] ?? ''; }\n" .
         "    \$parent = \$parentName ? \" data-parent-q='{\$parentName}' data-parent-opt='\" . htmlspecialchars(\$q['parent_option_value'], ENT_QUOTES, 'UTF-8') . \"' style='display:none;'\" : '';\n" .
         "    \$h = \"<div class='mb-4' id='wrap_{\$n}'\$parent><label class='form-label'>\$txt \" . (\$r ? '<span class=\"text-danger\">*</span>' : '') . \"</label>\";\n" .
-        "    if (in_array(\$t, ['text', 'email', 'tel'])) { \$h .= \"<input type='\$t' class='form-control' name='\$n' \$r>\"; }\n" .
-        "    elseif (\$t === 'textarea') { \$h .= \"<textarea class='form-control' name='\$n' rows='3' \$r></textarea>\"; }\n" .
+        "    if (in_array(\$t, ['text', 'email', 'tel'])) { \$h .= \"<input type='\$t' class='form-control' name='\$n' \" . (\$r ? 'data-required=\"1\" required' : '') . \">\"; }\n" .
+        "    elseif (\$t === 'textarea') { \$h .= \"<textarea class='form-control' name='\$n' rows='3' \" . (\$r ? 'data-required=\"1\" required' : '') . \"></textarea>\"; }\n" .
         "    elseif (in_array(\$t, ['radio', 'checkbox'])) {\n" .
         "        \$h = \"<div class='mb-4' id='wrap_{\$n}'\$parent><p class='mb-3 fw-semibold'>\$txt \" . (\$r ? '<span class=\"text-danger\">*</span>' : '') . \"</p><div class='row g-2'>\";\n" .
-        "        foreach (\$opts as \$o) { \$oid = md5(\$n . \$o); \$h .= \"<div class='col-md-6'><div class='form-check'><input type='\$t' class='form-check-input' name='{\$n}[]' id='\$oid' value='\" . htmlspecialchars(\$o, ENT_QUOTES, 'UTF-8') . \"' \$r><label class='form-check-label' for='\$oid'>\$o</label></div></div>\"; }\n" .
+        "        foreach (\$opts as \$o) { \$oid = md5(\$n . \$o); \$h .= \"<div class='col-md-6'><div class='form-check'><input type='\$t' class='form-check-input' name='{\$n}[]' id='\$oid' value='\" . htmlspecialchars(\$o, ENT_QUOTES, 'UTF-8') . \"' \" . (\$r ? 'data-required=\"1\" required' : '') . \"><label class='form-check-label' for='\$oid'>\$o</label></div></div>\"; }\n" .
         "        \$h .= \"</div>\";\n" .
         "    } \$h .= \"</div>\"; return \$h;\n" .
         "};\n\n" .
@@ -627,6 +477,7 @@ function buildSubmit($eid, $tQ, $eQ) {
         "header('Location: index.php');\n?>";
 }
 
+$tpl = null;
 $tplName = $tpl ? $tpl['template_name'] : '';
 $evtName = $evt ? $evt['event_name'] : '';
 ?>
@@ -736,243 +587,90 @@ $evtName = $evt ? $evt['event_name'] : '';
             <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
             Home
         </a>
-        <div class="px-3 py-2 mt-2">
-            <small class="text-muted text-uppercase fw-semibold" style="font-size:0.7rem;letter-spacing:0.05em;">Menu</small>
-        </div>
-        <a href="?tab=templates" class="nav-item <?php echo $tab === 'templates' ? 'active' : ''; ?>">
+        <a href="templates.php" class="nav-item">
             <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             Templates
         </a>
-        <a href="?tab=events" class="nav-item <?php echo $tab === 'events' ? 'active' : ''; ?>">
+        <a href="index.php" class="nav-item active">
             <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
             Events
         </a>
 
-        <div class="px-3 py-2 mt-3">
-            <small class="text-muted text-uppercase fw-semibold" style="font-size:0.7rem;letter-spacing:0.05em;">
-                <?php echo $tab === 'templates' ? 'Templates' : 'Events'; ?>
-            </small>
-        </div>
-
-        <?php if ($tab === 'templates'): ?>
-            <?php foreach ($templates as $t): ?>
-                <a href="?tab=templates&tpl=<?php echo $t['id']; ?>" class="nav-item <?php echo $tplId == $t['id'] ? 'active' : ''; ?>" style="font-size:0.85rem; padding-left: 52px;">
-                    <?php echo htmlspecialchars($t['template_name']); ?>
-                </a>
-            <?php endforeach; ?>
-        <?php else: ?>
-            <?php foreach ($events as $e): ?>
-                <a href="?tab=events&evt=<?php echo urlencode($e['event_id']); ?>" class="nav-item <?php echo $evtId == $e['event_id'] ? 'active' : ''; ?>" style="font-size:0.85rem; padding-left: 52px;">
-                    <?php echo htmlspecialchars($e['event_name']); ?>
-                </a>
-            <?php endforeach; ?>
-        <?php endif; ?>
+        <div class="px-3 py-2 mt-3 text-white-50 small text-uppercase fw-bold">Active Events</div>
+        <?php foreach ($events as $e): ?>
+            <a href="?evt=<?php echo urlencode($e['event_id']); ?>" class="nav-item <?php echo $evtId == $e['event_id'] ? 'active' : ''; ?>" style="font-size:0.85rem; padding-left: 52px;">
+                <?php echo htmlspecialchars($e['event_name']); ?>
+            </a>
+        <?php endforeach; ?>
     </nav>
 </aside>
 
 <main class="main-content">
     <section class="editor-pane">
         <?php if ($msg): ?>
-            <div class="alert alert-<?php echo $msgType; ?> py-3 px-4 rounded-3 mb-4" style="animation: fadeIn 0.3s;">
-                <?php echo $msg; ?>
+            <div class="alert alert-<?php echo $msgType; ?> py-3 px-4 rounded-3 mb-4 position-relative overflow-hidden" role="alert" id="autoAlert" style="animation: fadeIn 0.3s;">
+                <div class="d-flex align-items-center">
+                    <div class="flex-grow-1">
+                        <?php echo $msg; ?>
+                    </div>
+                    <span class="badge bg-white bg-opacity-25 rounded-pill ms-3 small" id="alertTimer">5s</span>
+                </div>
+                <div class="position-absolute bottom-0 start-0 bg-white bg-opacity-25" id="alertProgress" style="height: 4px; width: 100%; transition: width 5s linear;"></div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
+            <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    const alert = document.getElementById('autoAlert');
+                    const timer = document.getElementById('alertTimer');
+                    const progress = document.getElementById('alertProgress');
+                    if (alert) {
+                        let timeLeft = 5;
+                        setTimeout(() => progress.style.width = '0%', 10);
+                        const interval = setInterval(() => {
+                            timeLeft--;
+                            if (timer) timer.textContent = timeLeft + 's';
+                            if (timeLeft <= 0) {
+                                clearInterval(interval);
+                                const bsAlert = new bootstrap.Alert(alert);
+                                bsAlert.close();
+                            }
+                        }, 1000);
+                    }
+                });
+            </script>
         <?php endif; ?>
 
-        <?php if ($tab === 'templates'): ?>
-            <?php if (!$tplId): ?>
-                <div class="card border-0 shadow-sm" style="border-radius:16px;">
-                    <div class="card-body p-4">
-                        <h4 class="mb-4 fw-bold">Create New Template</h4>
-                        <form method="POST">
-                            <input type="hidden" name="action" value="create_template">
-                            <div class="mb-3">
-                                <label class="form-label fw-semibold">Template Name</label>
-                                <input type="text" name="name" class="form-control" placeholder="e.g.: Workshop Feedback Form" required>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100 py-2">
-                                <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="me-2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                Create Template
-                            </button>
-                        </form>
-                    </div>
-                </div>
-                <div class="empty-state mt-5 text-center">
-                    <svg width="64" height="64" fill="none" stroke="#cbd5e1" stroke-width="1.5" viewBox="0 0 24 24" class="mb-4"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                    <p class="text-muted">Select a template from the sidebar or create a new one</p>
-                </div>
-            <?php else: ?>
-                <div class="d-flex justify-content-between align-items-center mb-4">
-                    <div>
-                        <h2 class="mb-1 fw-bold"><?php echo htmlspecialchars($tplName); ?></h2>
-                        <small class="text-muted"><?php echo count($tplSections); ?> sections</small>
-                    </div>
-                    <form method="POST" onsubmit="return confirm('Delete this template?');">
-                        <input type="hidden" name="action" value="del_template">
-                        <input type="hidden" name="id" value="<?php echo $tplId; ?>">
-                        <button type="submit" class="btn btn-secondary btn-sm">Delete Template</button>
+        <?php if (!$evtId): ?>
+            <div class="card border-0 shadow-sm" style="border-radius:16px;">
+                <div class="card-body p-4">
+                    <h4 class="mb-4 fw-bold">Create New Event</h4>
+                    <form method="POST" enctype="multipart/form-data">
+                        <input type="hidden" name="action" value="create_event">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Event Name</label>
+                            <input type="text" name="ename" class="form-control" placeholder="e.g.: National Seminar 2024" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Event ID (URL Slug)</label>
+                            <input type="text" name="eid" class="form-control" placeholder="e.g.: seminar-2024" required pattern="[a-zA-Z0-9_-]+">
+                            <small class="text-muted">Used for form URL: localhost/generated_forms/[id-event]/</small>
+                        </div>
+                        <div class="mb-4">
+                            <label class="form-label fw-semibold">Base Template</label>
+                            <select name="etpl" class="form-select">
+                                <option value="">-- No Template --</option>
+                                <?php foreach ($templates as $t): ?>
+                                    <option value="<?php echo $t['id']; ?>"><?php echo htmlspecialchars($t['template_name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="text-muted">Template will automatically copy sections and questions</small>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100 py-2">Create Event</button>
                     </form>
                 </div>
-
-                <!-- List Sections -->
-                <?php
-                $sectionNum = 1;
-                foreach ($tplSections as $s):
-                    $qs = isset($tplQs[$s['id']]) ? $tplQs[$s['id']] : [];
-                ?>
-                    <div class="section-card" data-section-id="<?php echo $s['id']; ?>">
-                        <div class="section-header">
-                            <div class="d-flex align-items-center gap-3">
-                                <span class="section-number"><?php echo $sectionNum++; ?></span>
-                                <h5 class="mb-0"><?php echo htmlspecialchars($s['section_title'] ?? '(No Title)'); ?></h5>
-                                <span class="badge" style="background:rgba(255,255,255,0.2);color:white;"><?php echo count($qs); ?> questions</span>
-                                <span class="badge" style="background:rgba(255,255,255,0.1);color:white;text-transform:capitalize;"><?php echo $s['layout']; ?> Layout</span>
-                            </div>
-                            <div class="d-flex gap-1">
-                                <form method="POST" class="d-inline">
-                                    <input type="hidden" name="action" value="move_template_section">
-                                    <input type="hidden" name="tid" value="<?php echo $tplId; ?>">
-                                    <input type="hidden" name="id" value="<?php echo $s['id']; ?>">
-                                    <input type="hidden" name="dir" value="up">
-                                    <button type="submit" class="btn btn-icon" style="background:rgba(255,255,255,0.2);color:white;">↑</button>
-                                </form>
-                                <form method="POST" class="d-inline">
-                                    <input type="hidden" name="action" value="move_template_section">
-                                    <input type="hidden" name="tid" value="<?php echo $tplId; ?>">
-                                    <input type="hidden" name="id" value="<?php echo $s['id']; ?>">
-                                    <input type="hidden" name="dir" value="down">
-                                    <button type="submit" class="btn btn-icon" style="background:rgba(255,255,255,0.2);color:white;">↓</button>
-                                </form>
-                                <button type="button" class="btn btn-icon" style="background:rgba(255,255,255,0.2);color:white;" onclick="openSModal(<?php echo $s['id']; ?>, '<?php echo addslashes($s['section_title'] ?? ''); ?>', '<?php echo $s['layout']; ?>')" title="Edit Section Settings">✎</button>
-                                <form method="POST" class="d-inline" onsubmit="return confirm('Delete this section?');">
-                                    <input type="hidden" name="action" value="del_template_section">
-                                    <input type="hidden" name="id" value="<?php echo $s['id']; ?>">
-                                    <button type="submit" class="btn btn-icon" style="background:rgba(255,255,255,0.2);color:white;">×</button>
-                                </form>
-                            </div>
-                        </div>
-                        <div class="section-body">
-                            <?php foreach ($qs as $q): ?>
-                                <div class="question-item" data-q-id="<?php echo $q['id']; ?>">
-                                    <div class="d-flex justify-content-between align-items-start mb-2">
-                                        <div class="flex-grow-1">
-                                            <input type="text" class="form-control fw-semibold q-text-input" value="<?php echo htmlspecialchars($q['question_text']); ?>"
-                                                onblur="updateQuestion(<?php echo $q['id']; ?>, this.value, '<?php echo $tab; ?>')">
-                                        </div>
-                                        <div class="d-flex gap-1 ms-3">
-                                            <button type="button" class="action-btn edit q-edit-btn" 
-                                                data-id="<?php echo $q['id']; ?>"
-                                                data-text="<?php echo htmlspecialchars($q['question_text'], ENT_QUOTES, 'UTF-8'); ?>"
-                                                data-type="<?php echo $q['question_type']; ?>"
-                                                data-req="<?php echo $q['is_required']; ?>"
-                                                data-opts="<?php echo htmlspecialchars($q['options'] ?? '', ENT_QUOTES, 'UTF-8'); ?>"
-                                                data-parent-id="<?php echo $q['parent_question_id']; ?>"
-                                                data-parent-opt="<?php echo htmlspecialchars($q['parent_option_value'] ?? '', ENT_QUOTES, 'UTF-8'); ?>"
-                                                data-owner-id="<?php echo $tplId; ?>"
-                                                data-sid="<?php echo $s['id']; ?>"
-                                                title="Edit">✎</button>
-                                            <form method="POST" class="d-inline">
-                                                <input type="hidden" name="action" value="del_template_q">
-                                                <input type="hidden" name="id" value="<?php echo $q['id']; ?>">
-                                                <button type="submit" class="action-btn delete" title="Delete">×</button>
-                                            </form>
-                                        </div>
-                                    </div>
-                                    <div class="d-flex gap-2 flex-wrap">
-                                        <span class="type-badge" style="background:#f1f5f9;color:#475569;">ID: <?php echo $q['id']; ?></span>
-                                        <span class="type-badge"><?php echo $q['question_type']; ?></span>
-                                        <?php if ($q['is_required']): ?>
-                                            <span class="required-badge">Required</span>
-                                        <?php endif; ?>
-                                        <?php if ($q['parent_question_id']): ?>
-                                            <span class="type-badge" style="background:#fef9c3;color:#854d0e;">Parent: <?php echo $q['parent_question_id']; ?> (<?php echo htmlspecialchars($q['parent_option_value']); ?>)</span>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-
-                            <!-- Add Question Form -->
-                            <form method="POST" class="mt-3">
-                                <input type="hidden" name="action" value="add_template_q">
-                                <input type="hidden" name="tid" value="<?php echo $tplId; ?>">
-                                <input type="hidden" name="sid" value="<?php echo $s['id']; ?>">
-                                <div class="row g-2">
-                                    <div class="col-6">
-                                        <input type="text" name="qtext" class="form-control" placeholder="Add question..." required>
-                                    </div>
-                                    <div class="col-3">
-                                        <select name="qtype" class="form-select">
-                                            <option value="text">Text</option>
-                                            <option value="email">Email</option>
-                                            <option value="tel">Phone</option>
-                                            <option value="textarea">Paragraph</option>
-                                            <option value="radio">Single Choice</option>
-                                            <option value="checkbox">Multiple Choice</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-3">
-                                        <button type="submit" class="btn btn-primary w-100">Add</button>
-                                    </div>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-
-                <!-- Add New Section -->
-                <form method="POST">
-                    <input type="hidden" name="action" value="create_template_section">
-                    <input type="hidden" name="tid" value="<?php echo $tplId; ?>">
-                    <div class="btn-add-section">
-                        <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="mb-2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        <div class="row g-2 justify-content-center">
-                            <div class="col-md-6">
-                                <input type="text" name="stitle" class="form-control" placeholder="Section name (optional)...">
-                            </div>
-                            <div class="col-md-4">
-                                <select name="slayout" class="form-select">
-                                    <option value="standard">Standard Layout</option>
-                                    <option value="grid">Grid (2-Column)</option>
-                                    <option value="stepper">Multi-step (Stepper)</option>
-                                </select>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-primary mt-2" style="width:200px;">Add Section</button>
-                    </div>
-                </form>
-            <?php endif; ?>
-
-        <?php elseif ($tab === 'events'): ?>
-            <?php if (!$evtId): ?>
-                <div class="card border-0 shadow-sm" style="border-radius:16px;">
-                    <div class="card-body p-4">
-                        <h4 class="mb-4 fw-bold">Create New Event</h4>
-                        <form method="POST" enctype="multipart/form-data">
-                            <input type="hidden" name="action" value="create_event">
-                            <div class="mb-3">
-                                <label class="form-label fw-semibold">Event Name</label>
-                                <input type="text" name="ename" class="form-control" placeholder="e.g.: National Seminar 2024" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label fw-semibold">Event ID (URL Slug)</label>
-                                <input type="text" name="eid" class="form-control" placeholder="e.g.: seminar-2024" required pattern="[a-zA-Z0-9_-]+">
-                                <small class="text-muted">Used for form URL: localhost/generated_forms/[id-event]/</small>
-                            </div>
-                            <div class="mb-4">
-                                <label class="form-label fw-semibold">Base Template</label>
-                                <select name="etpl" class="form-select">
-                                    <option value="">-- No Template --</option>
-                                    <?php foreach ($templates as $t): ?>
-                                        <option value="<?php echo $t['id']; ?>"><?php echo htmlspecialchars($t['template_name']); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <small class="text-muted">Template will automatically copy sections and questions</small>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100 py-2">Create Event</button>
-                        </form>
-                    </div>
-                </div>
-            <?php else: ?>
-                <div class="d-flex justify-content-between align-items-center mb-4">
+            </div>
+        <?php else: ?>
+            <div class="d-flex justify-content-between align-items-center mb-4">
                     <div>
                         <h2 class="mb-1 fw-bold"><?php echo htmlspecialchars($evtName); ?></h2>
                         <small class="text-muted">ID: <?php echo htmlspecialchars($evtId); ?></small>
@@ -989,6 +687,11 @@ $evtName = $evt ? $evt['event_name'] : '';
                             <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                             View Analytics
                         </a>
+                        <form method="POST" onsubmit="return confirm('Delete all responses for this event? This cannot be undone.');">
+                            <input type="hidden" name="action" value="del_event_feedback">
+                            <input type="hidden" name="id" value="<?php echo htmlspecialchars($evtId); ?>">
+                            <button type="submit" class="btn btn-outline-warning">Clear Responses</button>
+                        </form>
                         <form method="POST">
                             <input type="hidden" name="action" value="generate">
                             <input type="hidden" name="eid" value="<?php echo htmlspecialchars($evtId); ?>">
@@ -1211,7 +914,6 @@ $evtName = $evt ? $evt['event_name'] : '';
                     </div>
                 </form>
             <?php endif; ?>
-        <?php endif; ?>
     </section>
 
     <section class="preview-pane">
